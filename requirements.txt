@@ -1,0 +1,20 @@
+# Ariadne dependencies — placeholder manifest (no implementation yet).
+# Pin exact versions once the code lands.
+
+# --- Graph database driver ---
+neo4j                 # official Neo4j Python driver (used by DBCreator, the tools, and scoring)
+
+# --- LLM access ---
+anthropic             # Claude API (primary agent model)
+# openai              # optional second provider for model comparison
+
+# --- Config / environment ---
+python-dotenv         # load API keys and Neo4j credentials from .env
+
+# --- Analysis & plots ---
+pandas
+matplotlib
+
+# --- Dev / quality (optional) ---
+# pytest
+# ruff

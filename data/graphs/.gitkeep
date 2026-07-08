@@ -1,0 +1,2 @@
+# Exported graph snapshots / Neo4j dumps go here (git-ignored).
+# Keep a manifest of which snapshot maps to which experiment run.

@@ -1,0 +1,47 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+*.key
+
+# --- Neo4j / Docker data ---
+infra/neo4j/data/
+infra/neo4j/logs/
+infra/neo4j/import/
+infra/neo4j/plugins/
+*.dump
+
+# --- Generated graph snapshots ---
+data/graphs/*
+!data/graphs/.gitkeep
+
+# --- Experiment logs & raw run records ---
+experiments/logs/*
+!experiments/logs/.gitkeep
+
+# --- Results artifacts (regenerated from logs) ---
+results/figures/*
+!results/figures/.gitkeep
+results/tables/*
+!results/tables/.gitkeep
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
