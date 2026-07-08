@@ -58,6 +58,8 @@ The agent is **not** handed the whole graph as text — that would reduce the ta
 - Measure hallucinations during graph reasoning.
 - Evaluate how graph size affects reasoning quality.
 - Provide a reproducible benchmark for evaluating AI agents on graph-search problems.
+
+
 ---
 
 ## Repository layout
