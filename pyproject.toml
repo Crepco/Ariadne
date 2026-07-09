@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ariadne"
+version = "0.1.0"
+description = "Autonomous LLM agents for Active Directory attack-path discovery on synthetic BloodHound graphs."
+requires-python = ">=3.11"
+dependencies = [
+    "neo4j>=5.14",
+    "python-dotenv>=1.0",
+]
+
+# Extras are installed only when needed, to keep the base install small.
+[project.optional-dependencies]
+agent = ["anthropic>=0.40"]
+eval = ["pandas>=2.0", "matplotlib>=3.7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

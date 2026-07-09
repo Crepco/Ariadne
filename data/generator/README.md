@@ -1,26 +1,59 @@
 # data/generator/
 
-The synthetic-graph generator: **DBCreator** from the BloodHound-Tools project. It connects to the Neo4j instance and generates a randomized AD dataset directly inside it — no Windows, no collection step. You control the size (e.g. 500 nodes, 2,000 nodes) and it builds users, groups, computers, and the relationship edges between them.
+The synthetic-graph generator: fills Neo4j with a randomized-but-realistic AD
+forest (users, groups, computers + the attack-relevant edges between them),
+following the BloodHound schema.
 
-## Setup (planned)
+## Why our own generator (not DBCreator)
 
-Use the maintained fork — the original DBCreator has a known bug in its `generate` command that many people hit:
+The plan names DBCreator (michiellemmens fork) as the standard tool, with "a
+small hand-written Cypher graph-insert script" as the sanctioned fallback. We use
+the fallback as the primary path, deliberately:
 
-- **Fork:** `michiellemmens/DBCreator` (GitHub). Use this, or keep it as a fallback if the original throws errors.
-- **Requirements:** Python 3.7+, the `neo4j` driver, a running Neo4j instance ([`../../infra/neo4j/`](../../infra/neo4j/)).
+- **Neo4j 5.x / Aura compatibility** — DBCreator targets older Neo4j and commonly
+  breaks on 5.x (the exact class of error the plan warns about). Our generator
+  emits plain, modern Cypher with no APOC/admin dependencies, so it runs on Aura.
+- **Reproducibility** — it's fully seeded: the same `--seed` yields the same graph.
+- **Control** — we set the schema, edge density, and can plant known chains.
 
-> Clone the fork into this directory (or add it as a submodule) rather than committing a copy — pin the commit you used in a note here for reproducibility. **Verify the current state of the fork before Day 1.**
+Relationships are still *random*, so we never hand-pick the answer. The
+ground-truth path is computed **after** generation by `verify.py` using the same
+Cypher `shortestPath` BloodHound uses.
 
-## Why random relationships are fine
+## Files
 
-DBCreator generates **random** relationships, so you don't hand-pick "the answer is path X." That's a feature, not a bug: the ground-truth answer is computed **after** generation, directly from the graph, using the same Cypher shortest-path queries BloodHound uses ([`../cypher/ground_truth/`](../cypher/ground_truth/)). Random paths are arguably better than hand-tuned ones — they aren't accidentally biased to be easy.
+| File | Role |
+| --- | --- |
+| `generate.py` | Build the graph (in memory) and write it to Neo4j. Also does an offline `--dry-run` solvability check with no database. |
+| `verify.py` | Confirm counts loaded, then compute ground-truth shortest paths to Domain Admins (the answer key). |
 
-## Fallback
+Shared schema/DB/config live in the `ariadne` package under [`../../src/ariadne/`](../../src/ariadne/).
 
-Keep a small hand-written Cypher graph-insert script as a backup in case the generator needs patching for your Neo4j version. A starting point lives in [`../cypher/planted/`](../cypher/planted/).
+## Usage
 
-## To add
+```bash
+# From the repo root, with the venv active and .env filled in.
 
-- `generate.py` / config or a documented invocation of the fork's CLI.
-- `NODE_COUNTS` presets for the scaling curve (300 → 500 → 1,000 → 2,000+).
-- A note recording the exact fork commit + Neo4j version used.
+# 1. Offline sanity check — build in memory, report solvability, no DB needed:
+python data/generator/generate.py --dry-run
+
+# 2. Generate the default ~400-node graph and write it to Neo4j:
+python data/generator/generate.py --wipe
+
+# 3. Confirm it loaded and see ground-truth attack paths:
+python data/generator/verify.py
+
+# Larger graph for the scaling curve:
+python data/generator/generate.py --users 1500 --computers 300 --groups 150 --wipe
+```
+
+Key flags: `--users --computers --groups --density --seed --domain`,
+`--no-plant` (skip planted chains), `--wipe` (clear the DB first),
+`--dry-run` (no database write).
+
+## Planted chains
+
+By default the generator inserts two deterministic attack chains whose answers we
+already know, and writes them to `data/graphs/planted_answer_key.json`. This gives
+a hybrid dataset: realistic random bulk + a handful of hand-verified paths. Use
+`--no-plant` to disable.
