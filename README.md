@@ -51,6 +51,16 @@ The agent is **not** handed the whole graph as text — that would reduce the ta
 | `check_path_exists(start, end)` | Verify whether a proposed chain actually exists (agent self-check + scoring) |
 
 ---
+## Goals
+
+- Build an autonomous LLM agent capable of exploring an Active Directory attack graph.
+- Compare reasoning-based exploration against BloodHound's rule-based path discovery.
+- Measure hallucinations during graph reasoning.
+- Evaluate how graph size affects reasoning quality.
+- Provide a reproducible benchmark for evaluating AI agents on graph-search problems.
+
+
+---
 
 ## Repository layout
 
