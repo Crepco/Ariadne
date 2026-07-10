@@ -1,39 +1,112 @@
+import json
+
 from .llm import ask_llm
 from .prompts import SYSTEM_PROMPT
 from .tool_registry import TOOLS
 
 
+MAX_STEPS = 10
 
 
-def run_agent(start):
-    print("Searching node...")
+def run_agent(start_node: str):
+    """
+    Minimal ReAct loop.
 
-    user = TOOLS["search_node"](start)
+    Reason
+      ↓
+    Call Tool
+      ↓
+    Observe
+      ↓
+    Repeat
+    """
 
-    if not user:
-        return f"User '{start}' not found."
+    history = []
 
-    print(user)
+    history.append(
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        }
+    )
 
-    print("\nChecking outbound edges...")
+    history.append(
+        {
+            "role": "user",
+            "content": f"""
+Starting node: {start_node}
 
-    edges = TOOLS["query_outbound_edges"](user[0]["objectid"])
+Available tools:
 
-    print(edges)
+- search_node
+- query_outbound_edges
+- query_inbound_edges
+- check_path_exists
 
-    prompt = f"""
-You are a cybersecurity analyst.
+Respond ONLY in JSON.
 
-Given the following Active Directory graph information, explain what privileges
-the user has and what attack opportunities might exist.
+Example:
 
-User:
-{user}
+{{
+  "action":"search_node",
+  "input":"USER0001"
+}}
 
-Outbound edges:
-{edges}
+or
 
-Respond in plain English.
-"""
+{{
+  "action":"finish",
+  "answer":"..."
+}}
+""",
+        }
+    )
 
-    return ask_llm(prompt)
+    for step in range(MAX_STEPS):
+
+        print(f"\n========== STEP {step+1} ==========")
+
+        prompt = "\n".join(msg["content"] for msg in history)
+
+        response = ask_llm(prompt)
+
+        print("LLM:")
+        print(response)
+
+        try:
+            action = json.loads(response)
+
+        except Exception:
+            return response
+
+        if action["action"] == "finish":
+            return action["answer"]
+
+        tool = action["action"]
+
+        argument = action["input"]
+
+        if tool not in TOOLS:
+            return f"Unknown tool: {tool}"
+
+        print(f"\nCalling {tool}({argument})")
+
+        observation = TOOLS[tool](argument)
+
+        print(observation)
+
+        history.append(
+            {
+                "role": "assistant",
+                "content": response,
+            }
+        )
+
+        history.append(
+            {
+                "role": "user",
+                "content": f"Observation:\n{observation}",
+            }
+        )
+
+    return "Maximum reasoning steps exceeded."
