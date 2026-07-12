@@ -11,7 +11,7 @@ from ariadne.db import get_driver, run_read
 from ariadne.schema import TRAVERSABLE_EDGES
 
 
-def search_node(name_or_type: str, database: str = "neo4j"):
+def search_node(name_or_type: str, database: str | None = None):
     """
     Search for a node by name, partial name, or label.
 
@@ -48,7 +48,7 @@ def search_node(name_or_type: str, database: str = "neo4j"):
         driver.close()
 
 
-def query_outbound_edges(objectid: str, database: str = "neo4j"):
+def query_outbound_edges(objectid: str, database: str | None = None):
     """
     Return everything this node can reach/control.
     """
@@ -76,7 +76,7 @@ def query_outbound_edges(objectid: str, database: str = "neo4j"):
         driver.close()
 
 
-def query_inbound_edges(objectid: str, database: str = "neo4j"):
+def query_inbound_edges(objectid: str, database: str | None = None):
     """
     Return everything that can reach/control this node.
     """
@@ -107,7 +107,7 @@ def query_inbound_edges(objectid: str, database: str = "neo4j"):
 def check_path_exists(
     start_objectid: str,
     goal_objectid: str,
-    database: str = "neo4j",
+    database: str | None = None,
 ):
     """
     Verify whether an attack path exists between two objects.

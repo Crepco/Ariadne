@@ -128,4 +128,4 @@ The agent is **not** handed the whole graph as text — that would reduce the ta
 
 All experiments use **synthetic, locally-generated** data conforming to the BloodHound schema. There is no live network involved. If a real single-DC collection step is ever added for authenticity, collection tooling is only ever run against an environment we own or are explicitly authorised to test.
 
-> **Status:** scaffolding only — folder structure and READMEs are in place; no implementation code yet. See each directory's README for what goes there.
+> **Status:** end-to-end pipeline working. The seeded generator, Neo4j (Aura) storage, the 4 query tools, the ReAct agent (Gemini), hop-by-hop scoring with real hallucination detection, and the multi-size benchmark (`experiments/run_benchmark.py` → metrics + scaling plots in `results/`) are all implemented. Note two deviations from the original brief, for laptop reasons: **Neo4j Aura (cloud)** instead of Docker, and a **custom seeded generator** instead of DBCreator — see [`docs/AD_LLM_Synthetic_Data_Project_Plan.md`](docs/AD_LLM_Synthetic_Data_Project_Plan.md). Remaining: larger sweeps, a second model, and the write-up.

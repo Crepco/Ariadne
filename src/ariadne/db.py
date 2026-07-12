@@ -43,9 +43,16 @@ def verify_connectivity(config: Neo4jConfig | None = None) -> str:
 
 
 def run_read(
-    driver: Driver, query: str, database: str = "neo4j", **params: Any
+    driver: Driver, query: str, database: str | None = None, **params: Any
 ) -> list[dict[str, Any]]:
-    """Run a read query and return all rows as plain dicts."""
+    """Run a read query and return all rows as plain dicts.
+
+    ``database`` defaults to the configured ``NEO4J_DATABASE`` so callers that
+    don't care (e.g. the agent tools) still hit the right database on Aura,
+    where the database name is not ``neo4j``.
+    """
+    if database is None:
+        database = load_neo4j_config().database
     with driver.session(database=database) as session:
         result = session.run(query, **params)
         return [record.data() for record in result]
@@ -56,14 +63,17 @@ def run_write_batches(
     query: str,
     rows: Iterable[dict[str, Any]],
     *,
-    database: str = "neo4j",
+    database: str | None = None,
     batch_size: int = 1000,
 ) -> int:
     """Run a write query repeatedly over ``$rows`` in chunks. Returns row count.
 
     The query must reference an ``$rows`` parameter (typically ``UNWIND $rows AS
     row ...``). Batching keeps transactions small enough for Aura's limits.
+    ``database`` defaults to the configured ``NEO4J_DATABASE``.
     """
+    if database is None:
+        database = load_neo4j_config().database
     rows = list(rows)
     total = 0
     with driver.session(database=database) as session:

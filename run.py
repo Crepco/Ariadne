@@ -1,41 +1,55 @@
+"""Single agent run against the current graph (a quick smoke test / demo).
+
+For the full multi-size benchmark use experiments/run_benchmark.py.
+"""
+
+from ariadne.agent.llm import MODEL_NAME
 from ariadne.agent.loop import run_agent
-from ariadne.evaluation.score import score_run
-from ariadne.evaluation.logger import log_run
+from ariadne.evaluation.logger import log_row
+from ariadne.evaluation.score import ScoringContext, score_agent_result
+from ariadne.tools import search_node
 
 
 def main():
-    start = "PLANT_A_START"
+    start_name = "PLANT_A_START"
 
     print("=" * 50)
     print("Running Ariadne Agent")
     print("=" * 50)
 
-    result = run_agent(start)
+    result = run_agent(start_name)
 
     print("\nAgent Output:")
-    print(result)
+    print(result.answer)
 
-    # Later you'll replace these with the actual values returned by the agent
-    score = score_run(
-        "S-1-5-21-3653228291-3290358181-2571306751-900001",
-        "S-1-5-21-3653228291-3290358181-2571306751-512",
+    ctx = ScoringContext.load()
+    try:
+        start_oid = ctx.resolve(start_name) or search_node(start_name)[0]["objectid"]
+        score = score_agent_result(ctx, result, start_oid)
+
+        log_row(
+            {
+                "model": MODEL_NAME,
+                "graph_size": len(ctx.oids),
+                "scenario": "single:PLANT_A_START",
+                "start_name": start_name,
+                "start_node": start_oid,
+                "goal": "DOMAIN ADMINS",
+                **score,
+                "tool_calls": result.tool_calls,
+                "steps": result.steps,
+                "time_seconds": result.elapsed_seconds,
+                "error": "",
+            }
+        )
+    finally:
+        ctx.close()
+
+    print(
+        f"\nRun completed: correct={score['correct']}, "
+        f"valid_path={score['path_valid']}, hallucinated={score['hallucinated_edge']}, "
+        f"{result.tool_calls} tool calls, {result.elapsed_seconds:.1f}s."
     )
-
-    log_run(
-    model="Gemini",
-    scenario="PLANT_A",
-    graph_size=412,
-    start_node=start,
-    goal="DOMAIN ADMINS",
-    proposed_path=str(result),
-    tool_calls=2,
-    time_seconds=0,
-    path_valid=score["path_valid"],
-    matches_baseline=False,
-    hallucinated_edge=score["hallucinated_edge"],
-)
-
-    print("\nRun completed.")
 
 
 if __name__ == "__main__":
