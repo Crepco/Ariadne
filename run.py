@@ -3,7 +3,7 @@
 For the full multi-size benchmark use experiments/run_benchmark.py.
 """
 
-from ariadne.agent.llm import MODEL_NAME
+from ariadne.agent.llm import active_model
 from ariadne.agent.loop import run_agent
 from ariadne.evaluation.logger import log_row
 from ariadne.evaluation.score import ScoringContext, score_agent_result
@@ -29,7 +29,7 @@ def main():
 
         log_row(
             {
-                "model": MODEL_NAME,
+                "model": active_model(),
                 "graph_size": len(ctx.oids),
                 "scenario": "single:PLANT_A_START",
                 "start_name": start_name,

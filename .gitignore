@@ -30,6 +30,7 @@ data/graphs/*
 # --- Experiment logs & raw run records ---
 experiments/logs/*
 !experiments/logs/.gitkeep
+experiments/.benchmark.lock
 
 # --- Results artifacts (regenerated from logs) ---
 results/figures/*

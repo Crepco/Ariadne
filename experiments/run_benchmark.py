@@ -19,23 +19,34 @@ Usage (repo root, venv python)::
 from __future__ import annotations
 
 import argparse
-import subprocess
-import sys
-import time
-from pathlib import Path
+import os
 
-from ariadne.agent.llm import MODEL_NAME
-from ariadne.agent.loop import run_agent
-from ariadne.config import load_neo4j_config
-from ariadne.db import get_driver, run_read
-from ariadne.evaluation.logger import LOG_FILE, log_row, reset_log
-from ariadne.evaluation.metrics import compute_metrics, metrics_markdown
-from ariadne.evaluation.plots import make_plots
-from ariadne.evaluation.score import ScoringContext, score_agent_result
+# Cap BLAS / OpenMP thread pools BEFORE numpy or pandas load anywhere. On a
+# RAM-tight laptop the default (one thread pool per core, each with its own
+# buffers) can exhaust memory — the "OpenBLAS: Memory allocation failed" crash —
+# especially with the Neo4j driver and LLM client also resident. Must be set
+# before the first numpy import, so this stays above everything.
+for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from ariadne.agent import llm  # noqa: E402
+from ariadne.agent.loop import run_agent  # noqa: E402
+from ariadne.db import get_driver, run_read  # noqa: E402
+from ariadne.evaluation.logger import LOG_FILE, log_row, reset_log  # noqa: E402
+from ariadne.evaluation.score import ScoringContext, score_agent_result  # noqa: E402
+
+# metrics/plots pull in pandas + matplotlib (numpy). They're imported lazily at
+# the end of main() so numpy isn't resident during the long agent-running phase.
 
 REPO = Path(__file__).resolve().parents[1]
 GEN = REPO / "data" / "generator" / "generate.py"
 RESULTS_DIR = REPO / "results"
+LOCK = REPO / "experiments" / ".benchmark.lock"
 
 DEFAULT_SIZES = [150, 350, 600]  # user counts -> ~200 / ~460 / ~780 nodes
 DEFAULT_USERS = 300              # the repo's default graph, restored at the end
@@ -90,7 +101,7 @@ def run_one(ctx: ScoringContext, start: dict, graph_size: int) -> dict:
     """Run + score a single agent trial, returning a CSV row (never raises)."""
     short = start["name"].split("@")[0]
     row = {
-        "model": MODEL_NAME,
+        "model": llm.active_model(),
         "graph_size": graph_size,
         "scenario": f"{start['kind']}:{short}",
         "start_name": start["name"],
@@ -122,45 +133,65 @@ def main() -> None:
     ap.add_argument("--sizes", type=int, nargs="+", default=DEFAULT_SIZES, help="user counts per graph")
     ap.add_argument("--random", type=int, default=3, help="random start users per graph")
     ap.add_argument("--trials", type=int, default=1, help="trials per start user")
+    ap.add_argument("--models", nargs="+", default=[llm.active_model()],
+                    help="one or more model ids to compare (OpenRouter slugs or a Gemini id)")
     ap.add_argument("--no-restore", action="store_true", help="don't rebuild the default graph at the end")
     args = ap.parse_args()
+
+    # Guard against a second benchmark running concurrently: both would wipe and
+    # rewrite the SAME database and the same results.csv, clobbering each other.
+    if LOCK.exists():
+        print(f"A benchmark appears to be running already (lock file: {LOCK}).\n"
+              f"Run only one at a time. If you're sure none is running, delete that file and retry.")
+        sys.exit(1)
+    LOCK.write_text(str(os.getpid()), encoding="utf-8")
 
     reset_log()
     t0 = time.perf_counter()
     run_idx = 0
 
-    for users in args.sizes:
-        regenerate(users)
-        ctx = ScoringContext.load()
-        graph_size = len(ctx.oids)
-        starts = pick_starts(ctx.database, args.random)
-        print(f"   graph_size={graph_size} nodes, {len(starts)} start users x {args.trials} trial(s)")
-        try:
-            for start in starts:
-                for _ in range(args.trials):
-                    run_idx += 1
-                    row = run_one(ctx, start, graph_size)
-                    log_row(row)
-                    verdict = "ERR" if row["error"] else ("OK " if row["correct"] else "MISS")
-                    print(f"   [{run_idx:>3}] {verdict}  {row['scenario']:<28} "
-                          f"valid={row['path_valid']!s:<5} halluc={row['hallucinated_edge']!s:<5} "
-                          f"calls={row['tool_calls']} {row['time_seconds']}s")
-        finally:
-            ctx.close()
+    try:
+        for users in args.sizes:
+            regenerate(users)
+            ctx = ScoringContext.load()
+            graph_size = len(ctx.oids)
+            starts = pick_starts(ctx.database, args.random)
+            print(f"   graph_size={graph_size} nodes, {len(starts)} start users x "
+                  f"{args.trials} trial(s) x {len(args.models)} model(s)")
+            try:
+                for model in args.models:
+                    llm.set_model(model)
+                    for start in starts:
+                        for _ in range(args.trials):
+                            run_idx += 1
+                            row = run_one(ctx, start, graph_size)
+                            log_row(row)
+                            verdict = "ERR" if row["error"] else ("OK " if row["correct"] else "MISS")
+                            print(f"   [{run_idx:>3}] {verdict}  {model:<26} {row['scenario']:<26} "
+                                  f"valid={row['path_valid']!s:<5} halluc={row['hallucinated_edge']!s:<5} "
+                                  f"calls={row['tool_calls']} {row['time_seconds']}s")
+            finally:
+                ctx.close()
 
-    print(f"\nSwept {run_idx} runs in {time.perf_counter() - t0:.0f}s.\n")
+        print(f"\nSwept {run_idx} runs in {time.perf_counter() - t0:.0f}s.\n")
 
-    compute_metrics()
-    make_plots()
-    (RESULTS_DIR).mkdir(parents=True, exist_ok=True)
-    (RESULTS_DIR / "metrics.md").write_text(metrics_markdown(), encoding="utf-8")
-    print(f"Wrote {RESULTS_DIR / 'metrics.md'}")
-    print(f"Log: {LOG_FILE}")
+        # Deferred so pandas/matplotlib (numpy) aren't resident during the sweep.
+        from ariadne.evaluation.metrics import compute_metrics, metrics_markdown
+        from ariadne.evaluation.plots import make_plots
 
-    if not args.no_restore:
-        print("\nRestoring default graph ...")
-        regenerate(DEFAULT_USERS, computers=60, groups=40)
-        print("Default graph restored.")
+        compute_metrics()
+        make_plots()
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        (RESULTS_DIR / "metrics.md").write_text(metrics_markdown(), encoding="utf-8")
+        print(f"Wrote {RESULTS_DIR / 'metrics.md'}")
+        print(f"Log: {LOG_FILE}")
+
+        if not args.no_restore:
+            print("\nRestoring default graph ...")
+            regenerate(DEFAULT_USERS, computers=60, groups=40)
+            print("Default graph restored.")
+    finally:
+        LOCK.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
