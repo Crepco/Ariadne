@@ -106,4 +106,4 @@ Configuration lives entirely in `.env` — see [`.env.example`](.env.example) fo
 
 ## License
 
-No license file yet — add one before reuse. Until then, all rights reserved by the author.
+[MIT](LICENSE) © 2026 Hamza.
