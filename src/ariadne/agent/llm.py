@@ -44,6 +44,7 @@ _key_lock = threading.Lock()
 
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+_OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "512"))
 
 _default_provider = os.getenv("LLM_PROVIDER") or ("openrouter" if _OPENROUTER_KEYS else "gemini")
 _state = {
@@ -94,6 +95,13 @@ def _openrouter(prompt: str, model: str, max_retries: int) -> str:
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
+                    # Cap the completion budget. The agent only emits a small JSON
+                    # object per turn, so ~512 tokens is ample — and it stops
+                    # OpenRouter from *reserving* the model's full 16k-token budget
+                    # against the account balance, which caused HTTP 402
+                    # "requires more credits, or fewer max_tokens" once free credit
+                    # ran low.
+                    "max_tokens": _OPENROUTER_MAX_TOKENS,
                 },
                 timeout=120,
             )

@@ -1,24 +1,24 @@
 # data/
 
-Everything about producing the graph the agent reasons over, and the ground-truth answer key it's scored against.
+Producing the graph the agent reasons over, and the ground-truth answer key it's scored against.
 
 ## Subfolders
 
 | Path | Purpose |
 | --- | --- |
-| [`generator/`](generator/) | DBCreator — fills Neo4j with a synthetic, structurally realistic AD graph |
-| [`cypher/`](cypher/) | Cypher scripts: ground-truth shortest paths (answer key) + optional planted misconfiguration chains |
-| [`graphs/`](graphs/) | Exported graph snapshots / dumps for reproducibility (git-ignored) |
+| [`generator/`](generator/) | Seeded generator that fills Neo4j with a synthetic, structurally realistic AD graph |
+| [`cypher/`](cypher/) | Ground-truth shortest-path Cypher — the answer key and BloodHound-equivalent baseline |
+| `graphs/` | Generated snapshots (e.g. `planted_answer_key.json`), git-ignored |
 
-## The pipeline
+## Pipeline
 
 ```
-generator/  →  Neo4j (infra/neo4j)  →  cypher/ground_truth  →  answer key
-                                    →  cypher/planted        →  known-answer chains
+generator/  →  Neo4j  →  cypher/ground_truth (shortest paths)  →  answer key
 ```
 
-## Why synthetic data is fine (for the paper)
+## Why synthetic data
 
-- Evaluated on synthetic AD graphs conforming to the **BloodHound schema** — the same structure real collections use — which lets us control graph size and **guarantee ground truth**.
-- Synthetic evaluation is standard practice for reproducible benchmarks: it removes organisation-specific noise and privacy concerns.
-- "Validation on live-collected AD data" is listed explicitly as **future work**.
+The graphs conform to the **BloodHound schema** — the same structure a real SharpHound
+collection produces — so the agent faces a realistic problem while we keep two things a
+live network can't give us: full control over graph size, and an exact ground truth to
+score against. There is no data-collection step and no live network.

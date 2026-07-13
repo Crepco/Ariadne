@@ -10,12 +10,14 @@ requires-python = ">=3.11"
 dependencies = [
     "neo4j>=5.14",
     "python-dotenv>=1.0",
+    "requests>=2.31",   # OpenRouter (OpenAI-compatible) HTTP client
+    "pandas>=2.0",      # metrics aggregation
 ]
 
 # Extras are installed only when needed, to keep the base install small.
 [project.optional-dependencies]
-agent = ["anthropic>=0.40"]
-eval = ["pandas>=2.0", "matplotlib>=3.7"]
+viz = ["matplotlib>=3.7"]          # scaling plots (experiments/run_benchmark.py)
+gemini = ["google-genai>=1.0"]     # optional native Gemini backend
 
 [tool.setuptools.packages.find]
 where = ["src"]

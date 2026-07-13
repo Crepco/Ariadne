@@ -32,11 +32,8 @@ experiments/logs/*
 !experiments/logs/.gitkeep
 experiments/.benchmark.lock
 
-# --- Results artifacts (regenerated from logs) ---
-results/figures/*
-!results/figures/.gitkeep
-results/tables/*
-!results/tables/.gitkeep
+# Generated result artifacts (results/*.png, results/metrics.md) are committed so
+# the repo is self-demonstrating; regenerate them with experiments/run_benchmark.py.
 
 # --- Notebooks ---
 .ipynb_checkpoints/

@@ -1,25 +1,29 @@
 # src/ariadne/agent/
 
-The LLM agent — a minimal, custom **ReAct loop**: reason → call a tool → observe the result → repeat, until it proposes an attack path or hits a step budget.
+The LLM agent — a minimal, custom **ReAct loop**: reason → call a tool → observe the
+result → repeat, until it proposes an attack path or hits the step budget. Deliberately
+lightweight, so what's measured is the *model's* reasoning over the graph, not clever
+scaffolding.
 
-Deliberately lightweight. The point of the study is to measure the *model's* reasoning over the graph, so the scaffolding around it stays thin and legible.
+## Modules
 
-## Responsibilities
+| File | Role |
+| --- | --- |
+| `loop.py` | The ReAct control loop. Returns an `AgentResult` with the proposed path and real telemetry (tool calls, steps, wall-clock time). |
+| `prompts.py` | System prompt: the goal, the rules ("never invent edges"), the tools, and the JSON action format. |
+| `llm.py` | LLM backend + `ask_llm()`. Defaults to **OpenRouter** (any model, keys rotated); optional native **Gemini**. `active_model()` / `set_model()` support multi-model benchmarks. |
+| `tool_registry.py` | Maps action names to the tool functions in [`../tools/`](../tools/). |
 
-- Hold the system prompt: the goal, the rules, and the available tools ([`../tools/`](../tools/)).
-- Drive the reason/act/observe loop against one LLM via its native tool-use API.
-- Enforce guardrails: max steps / max tool calls, timeout, output format.
-- Emit a structured final answer — an ordered list of hops, each with a one-line justification.
+## The loop
 
-## LLM access
+Each turn the model returns one JSON object — either an action
+(`{"action": "query_outbound_edges", "input": "..."}`) or a finish
+(`{"action": "finish", "answer": "...", "path": [...]}`). The loop executes the tool, feeds
+the observation back, and repeats up to `MAX_STEPS`. A run that never finishes is recorded
+as *incomplete* — distinct from a wrong or hallucinated answer.
 
-- Primary: Anthropic API (Claude) — use the latest Claude models.
-- Optional: a second provider (e.g. OpenAI) to enable a model-vs-model comparison.
-- Keys come from `.env` via the shared `config.py`; never hard-code them.
+## LLM backend
 
-## To add
-
-- `loop.py` — the ReAct control loop.
-- `prompts.py` — system prompt + output-format instructions.
-- `llm.py` — provider abstraction so a second model can be dropped in.
-- A `run(start_node, goal)` entry point that hands its result to [`../evaluation/`](../evaluation/).
+Configured entirely through `.env` (see [`.env.example`](../../../.env.example)): set
+`OPENROUTER_API_KEYS` (one or more, comma-separated) to use OpenRouter, or `GEMINI_API_KEY`
+with `LLM_PROVIDER=gemini`. Keys are never hard-coded.

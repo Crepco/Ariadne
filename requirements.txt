@@ -1,20 +1,11 @@
-# Ariadne dependencies — placeholder manifest (no implementation yet).
-# Pin exact versions once the code lands.
+# Runtime dependencies. Prefer an editable install (`pip install -e .`), which
+# reads pyproject.toml; this file mirrors it for `pip install -r requirements.txt`.
 
-# --- Graph database driver ---
-neo4j                 # official Neo4j Python driver (used by DBCreator, the tools, and scoring)
+neo4j>=5.14            # Neo4j Python driver (generator, tools, scoring)
+python-dotenv>=1.0     # load Neo4j creds + API keys from .env
+requests>=2.31         # OpenRouter (OpenAI-compatible) HTTP client
+pandas>=2.0            # metrics aggregation
+matplotlib>=3.7        # scaling plots
 
-# --- LLM access ---
-anthropic             # Claude API (primary agent model)
-# openai              # optional second provider for model comparison
-
-# --- Config / environment ---
-python-dotenv         # load API keys and Neo4j credentials from .env
-
-# --- Analysis & plots ---
-pandas
-matplotlib
-
-# --- Dev / quality (optional) ---
-# pytest
-# ruff
+# Optional native Gemini backend (only if you use LLM_PROVIDER=gemini):
+# google-genai>=1.0
