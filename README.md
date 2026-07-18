@@ -64,7 +64,7 @@ python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\ac
 pip install -e ".[viz]"
 
 # 2. Configure credentials.
-cp .env.example .env        # then fill in NEO4J_* and OPENROUTER_API_KEYS
+cp .env.example .env        # Windows: copy .env.example .env — then fill in NEO4J_* and OPENROUTER_API_KEYS
 
 # 3. Generate the synthetic graph into Neo4j (deterministic, seed=1337).
 python data/generator/generate.py --wipe
@@ -76,6 +76,9 @@ python run.py
 # 5. Run the full benchmark (sweeps graph sizes, scores every run, writes results/).
 python experiments/run_benchmark.py --sizes 150 350 600 --random 5
 ```
+
+Offline unit tests (no Neo4j or API key needed) live in [`tests/unit/`](tests/unit/);
+run them with `pip install -e ".[dev]"` then `pytest`.
 
 Configuration lives entirely in `.env` — see [`.env.example`](.env.example) for every option (Neo4j connection, LLM backend/model, rate limits).
 

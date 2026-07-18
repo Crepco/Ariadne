@@ -77,6 +77,24 @@ def _next_key() -> str:
         return next(_key_cycle)
 
 
+def _extract_content(resp) -> str | None:
+    """Pull the completion text out of a 200 response, or None if it's malformed.
+
+    OpenRouter occasionally returns HTTP 200 with an inline ``{"error": ...}`` or
+    an empty ``choices`` list; guard every access so those become a retry, not an
+    unhandled ``KeyError``/``IndexError``."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices:
+        return None
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    return content if isinstance(content, str) else None
+
+
 def _openrouter(prompt: str, model: str, max_retries: int) -> str:
     if not _OPENROUTER_KEYS:
         raise LLMError("No OPENROUTER_API_KEYS configured in .env")
@@ -106,7 +124,15 @@ def _openrouter(prompt: str, model: str, max_retries: int) -> str:
                 timeout=120,
             )
             if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
+                content = _extract_content(resp)
+                if content is not None:
+                    return content
+                # 200 OK but no usable completion (e.g. a body carrying an
+                # inline {"error": ...}, or empty choices). Treat as transient
+                # and retry rather than crashing on a KeyError.
+                last = RuntimeError(f"OpenRouter 200 without content: {resp.text[:160]}")
+                time.sleep(min(20.0, 2 + attempt * 3))
+                continue
             if resp.status_code in (429, 500, 502, 503):
                 last = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160]}")
                 time.sleep(min(20.0, 2 + attempt * 3))

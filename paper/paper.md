@@ -70,7 +70,7 @@ errors, not agent failures)._
 | Correctness | 57.7% |
 | Valid-path rate | 37.5% |
 | Hallucination rate | 2.9% |
-| Optimal-length (of solved) | 63.3% |
+| Optimal of paths found | 97.4% (39 found) |
 | Avg tool calls (solved) | 4.38 |
 | Avg runtime (s) | 20.5 |
 | Agent misses (of reachable) | 44/83 |
@@ -89,8 +89,8 @@ cost rises with it (5.7 → 8.0 tool calls, 17.8s → 24.4s). Against BloodHound
 finds a path whenever one exists, the agent solved only ~47% of the genuinely
 reachable cases (44/83 missed). (2) **The agent is trustworthy when it does answer:**
 hallucination is ≤5.6% and *decreases* with size (0% at 674 nodes) — on larger graphs
-it fails by giving up or missing, not by inventing edges. Where it does find a path,
-63% are the optimal (shortest) length.
+it fails by giving up or missing, not by inventing edges. And when it does find a path,
+it is almost always the shortest one: 38 of the 39 real paths found (97.4%) are optimal.
 
 _Caveats._ Temperature is 0, so the 3 trials per start are near-duplicates — the
 effective unique-scenario count is ~35, not 104; multi-trial variance would need

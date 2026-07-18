@@ -392,48 +392,45 @@ def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = 
     if database is None:
         database = load_neo4j_config().database
     allowed_edges = set(TRAVERSABLE_EDGES)
-    driver = get_driver()
-    try:
-        with driver.session(database=database) as session:
-            # Uniqueness constraint per label doubles as an objectid index.
-            for label in NODE_LABELS:
-                session.run(
-                    f"CREATE CONSTRAINT {label.lower()}_objectid IF NOT EXISTS "
-                    f"FOR (n:{label}) REQUIRE n.objectid IS UNIQUE"
-                ).consume()
-            if wipe:
-                session.run("MATCH (n) DETACH DELETE n").consume()
+    driver = get_driver()  # shared process-wide driver; closed at interpreter exit
+    with driver.session(database=database) as session:
+        # Uniqueness constraint per label doubles as an objectid index.
+        for label in NODE_LABELS:
+            session.run(
+                f"CREATE CONSTRAINT {label.lower()}_objectid IF NOT EXISTS "
+                f"FOR (n:{label}) REQUIRE n.objectid IS UNIQUE"
+            ).consume()
+        if wipe:
+            session.run("MATCH (n) DETACH DELETE n").consume()
 
-        # Nodes, grouped by label (labels can't be parametrized in Cypher).
-        by_label: dict[str, list[dict]] = defaultdict(list)
-        for n in graph["nodes"]:
-            by_label[n["label"]].append({"objectid": n["objectid"], "props": n["props"]})
-        for label, rows in by_label.items():
-            run_write_batches(
-                driver,
-                f"UNWIND $rows AS row MERGE (n:{label} {{objectid: row.objectid}}) "
-                f"SET n += row.props",
-                rows,
-                database=database,
-            )
+    # Nodes, grouped by label (labels can't be parametrized in Cypher).
+    by_label: dict[str, list[dict]] = defaultdict(list)
+    for n in graph["nodes"]:
+        by_label[n["label"]].append({"objectid": n["objectid"], "props": n["props"]})
+    for label, rows in by_label.items():
+        run_write_batches(
+            driver,
+            f"UNWIND $rows AS row MERGE (n:{label} {{objectid: row.objectid}}) "
+            f"SET n += row.props",
+            rows,
+            database=database,
+        )
 
-        # Edges, grouped by type (types can't be parametrized either).
-        by_type: dict[str, list[dict]] = defaultdict(list)
-        for etype, src, dst in graph["edges"]:
-            if etype not in allowed_edges:  # guard against Cypher injection
-                raise ValueError(f"Unknown edge type: {etype!r}")
-            by_type[etype].append({"src": src, "dst": dst})
-        for etype, rows in by_type.items():
-            run_write_batches(
-                driver,
-                f"UNWIND $rows AS row "
-                f"MATCH (a {{objectid: row.src}}) MATCH (b {{objectid: row.dst}}) "
-                f"MERGE (a)-[:{etype}]->(b)",
-                rows,
-                database=database,
-            )
-    finally:
-        driver.close()
+    # Edges, grouped by type (types can't be parametrized either).
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for etype, src, dst in graph["edges"]:
+        if etype not in allowed_edges:  # guard against Cypher injection
+            raise ValueError(f"Unknown edge type: {etype!r}")
+        by_type[etype].append({"src": src, "dst": dst})
+    for etype, rows in by_type.items():
+        run_write_batches(
+            driver,
+            f"UNWIND $rows AS row "
+            f"MATCH (a {{objectid: row.src}}) MATCH (b {{objectid: row.dst}}) "
+            f"MERGE (a)-[:{etype}]->(b)",
+            rows,
+            database=database,
+        )
 
 
 # ---------------------------------------------------------------------------

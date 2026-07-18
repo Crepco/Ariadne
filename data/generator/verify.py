@@ -120,16 +120,13 @@ def main() -> None:
     from ariadne.config import load_neo4j_config
 
     db = load_neo4j_config().database
-    driver = get_driver()
-    try:
-        counts(driver, database=db)
-        goal = goal_objectid(driver, database=db)
-        if not goal:
-            print(f"\nCould not find the {GOAL_GROUP} group — was the graph generated?")
-            return
-        sample_ground_truth(driver, goal, args.samples, database=db)
-    finally:
-        driver.close()
+    driver = get_driver()  # shared process-wide driver; closed at interpreter exit
+    counts(driver, database=db)
+    goal = goal_objectid(driver, database=db)
+    if not goal:
+        print(f"\nCould not find the {GOAL_GROUP} group — was the graph generated?")
+        return
+    sample_ground_truth(driver, goal, args.samples, database=db)
 
 
 if __name__ == "__main__":

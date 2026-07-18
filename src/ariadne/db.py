@@ -3,26 +3,76 @@
 Nothing clever here — just a single place that knows how to open a driver from
 config and run batched writes / reads, so the rest of the code never touches the
 raw driver lifecycle.
+
+The driver is a **process-wide singleton**. A Neo4j ``Driver`` owns a connection
+pool and is designed to be created once and reused; it is thread-safe. Opening a
+fresh driver per query (which the agent tools used to do, once per tool call)
+means a new pool and — on Aura — a fresh TLS handshake and routing-table fetch
+every time, which dominates the runtime of a benchmark sweep. ``get_driver()``
+therefore returns the cached driver by default and callers must **not** close it;
+it is closed once at interpreter exit (and can be closed explicitly via
+``close_driver()``). Passing an explicit ``config`` opts out of the cache and
+returns a fresh driver the caller owns.
 """
 
 from __future__ import annotations
 
+import atexit
+import threading
 from typing import Any, Iterable
 
 from neo4j import Driver, GraphDatabase
 
 from .config import Neo4jConfig, load_neo4j_config
 
+# Process-wide cached driver, keyed by connection identity so a change of
+# credentials (e.g. in tests) transparently rebuilds it.
+_shared_driver: Driver | None = None
+_shared_key: tuple[str, str, str] | None = None
+_driver_lock = threading.Lock()
+
 
 def get_driver(config: Neo4jConfig | None = None) -> Driver:
-    """Open a Neo4j driver using the given (or environment-loaded) config."""
-    cfg = config or load_neo4j_config()
-    return GraphDatabase.driver(cfg.uri, auth=(cfg.user, cfg.password))
+    """Return a Neo4j driver.
+
+    With no ``config`` (the common case) this returns the cached, shared driver —
+    do **not** call ``.close()`` on it; use :func:`close_driver` for teardown.
+    With an explicit ``config`` it returns a fresh driver the caller owns and is
+    responsible for closing.
+    """
+    if config is not None:
+        return GraphDatabase.driver(config.uri, auth=(config.user, config.password))
+
+    global _shared_driver, _shared_key
+    cfg = load_neo4j_config()
+    key = (cfg.uri, cfg.user, cfg.password)
+    with _driver_lock:
+        if _shared_driver is None or _shared_key != key:
+            if _shared_driver is not None:
+                _shared_driver.close()
+            _shared_driver = GraphDatabase.driver(cfg.uri, auth=(cfg.user, cfg.password))
+            _shared_key = key
+        return _shared_driver
+
+
+def close_driver() -> None:
+    """Close the shared driver, if one is open. Safe to call repeatedly."""
+    global _shared_driver, _shared_key
+    with _driver_lock:
+        if _shared_driver is not None:
+            _shared_driver.close()
+            _shared_driver = None
+            _shared_key = None
+
+
+atexit.register(close_driver)
 
 
 def verify_connectivity(config: Neo4jConfig | None = None) -> str:
     """Ping the database. Returns the server agent string, or raises on failure."""
     cfg = config or load_neo4j_config()
+    # Use a dedicated, caller-owned driver so this one-shot check never disturbs
+    # the shared driver's lifecycle.
     driver = get_driver(cfg)
     try:
         driver.verify_connectivity()

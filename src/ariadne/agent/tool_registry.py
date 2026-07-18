@@ -1,13 +1,9 @@
-from ariadne.tools import (
-    search_node,
-    query_outbound_edges,
-    query_inbound_edges,
-    check_path_exists,
-)
+"""The tool name -> callable map the agent loop dispatches on.
 
-TOOLS = {
-    "search_node": search_node,
-    "query_outbound_edges": query_outbound_edges,
-    "query_inbound_edges": query_inbound_edges,
-    "check_path_exists": check_path_exists,
-}
+Single source of truth is ``ariadne.tools.TOOLS``; this module just re-exports it
+so ``from .tool_registry import TOOLS`` keeps working for the loop.
+"""
+
+from ariadne.tools import TOOLS
+
+__all__ = ["TOOLS"]

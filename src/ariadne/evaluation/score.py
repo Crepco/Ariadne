@@ -101,10 +101,10 @@ class ScoringContext:
         return cls(driver, database, goal_oid, name_to_oid, oids, rel_filter)
 
     def close(self) -> None:
-        try:
-            self.driver.close()
-        except Exception:
-            pass
+        # The driver is the process-wide shared instance (ariadne.db), so we do
+        # NOT close it here — other runs in the same sweep reuse it. It is closed
+        # once at interpreter exit. Kept as a no-op for call-site compatibility.
+        return None
 
     # -- resolution / graph checks --
     def resolve(self, token: str):

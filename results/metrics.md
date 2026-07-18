@@ -6,6 +6,7 @@
 | Correctness | 57.7% |
 | Valid-path rate | 37.5% |
 | Hallucination rate | 2.9% |
+| Optimal of paths found | 97.4% (39 found) |
 | Avg tool calls (solved) | 4.38 |
 | Avg runtime (s) | 20.54 |
 | Agent misses (of reachable) | 44/83 |

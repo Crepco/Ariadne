@@ -9,3 +9,6 @@ matplotlib>=3.7        # scaling plots
 
 # Optional native Gemini backend (only if you use LLM_PROVIDER=gemini):
 # google-genai>=1.0
+
+# Dev/test (offline unit suite under tests/unit/): pip install -e ".[dev]"
+# pytest>=8.0

@@ -58,6 +58,7 @@ def _pct(x: float) -> str:
 def _overall(df: pd.DataFrame) -> dict:
     total = len(df)
     solved = df[df["correct"]]
+    found = df[df["path_valid"]]           # runs where the agent proposed a REAL path
     reachable = df[df["baseline_reachable"]]
     agent_miss = df[df["baseline_reachable"] & ~df["correct"]]
     return {
@@ -68,7 +69,12 @@ def _overall(df: pd.DataFrame) -> dict:
         "incomplete": int(df["incomplete"].sum()) if "incomplete" in df else 0,
         "avg_tool_calls_correct": solved["tool_calls"].mean() if len(solved) else float("nan"),
         "avg_time": df["time_seconds"].mean() if total else float("nan"),
-        "optimal_of_solved": (df["optimal"].sum() / len(solved)) if len(solved) else float("nan"),
+        # Of the paths the agent actually found, how many are shortest. The
+        # denominator is valid paths found, NOT all correct runs — the latter
+        # also counts runs that correctly declared "no path" (which have no
+        # length) and would badly understate the rate.
+        "found": len(found),
+        "optimal_of_found": (df["optimal"].sum() / len(found)) if len(found) else float("nan"),
         "reachable": len(reachable),
         "agent_miss": len(agent_miss),
     }
@@ -112,8 +118,8 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     print(f"Incomplete (no answer) : {o['incomplete']}")
     print(f"Avg tool calls (solved): {o['avg_tool_calls_correct']:.2f}")
     print(f"Avg runtime (s)        : {o['avg_time']:.2f}")
-    if o["reachable"]:
-        print(f"Optimal-length (solved): {_pct(o['optimal_of_solved'])}")
+    if o["found"]:
+        print(f"Optimal of paths found : {_pct(o['optimal_of_found'])}  ({o['found']} real paths found)")
     print(f"Gap vs BloodHound      : {o['agent_miss']}/{o['reachable']} reachable cases the agent missed")
 
     print("\nScaling by graph size:")
@@ -147,6 +153,7 @@ def metrics_markdown(path: Path = LOG_FILE) -> str:
         f"| Correctness | {_pct(o['correctness'])} |",
         f"| Valid-path rate | {_pct(o['path_valid'])} |",
         f"| Hallucination rate | {_pct(o['hallucination'])} |",
+        f"| Optimal of paths found | {_pct(o['optimal_of_found'])} ({o['found']} found) |",
         f"| Avg tool calls (solved) | {o['avg_tool_calls_correct']:.2f} |",
         f"| Avg runtime (s) | {o['avg_time']:.2f} |",
         f"| Agent misses (of reachable) | {o['agent_miss']}/{o['reachable']} |",

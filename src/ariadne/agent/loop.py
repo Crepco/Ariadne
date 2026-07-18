@@ -128,18 +128,29 @@ def _result(answer, finished, path_field, tool_calls, steps, started, history) -
 
 
 def _parse_json(text: str):
-    """Parse a JSON object, tolerating prose or ```json code fences around it."""
+    """Parse a JSON *object*, tolerating prose or ```json code fences around it.
+
+    Returns the parsed dict, or None if the text has no usable JSON object. Only
+    objects are accepted: a bare JSON string/list/number is not a valid action
+    and returning it would make the caller's ``action.get(...)`` raise.
+    """
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except Exception:
-                return None
-        return None
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            parsed = json.loads(text[start : end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+    return None
 
 
 def _as_str_list(v):

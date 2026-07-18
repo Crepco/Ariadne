@@ -1,9 +1,24 @@
 # tests/
 
-Manual smoke checks for each component — not a `pytest` suite. Each script exercises
-one piece against a **live Neo4j** (see `.env`) and, where relevant, a **live LLM**
-(needs an API key), then prints what it got back. Run them individually from the repo
-root with the project's Python:
+Two kinds of tests live here.
+
+## `tests/unit/` — offline unit suite (default `pytest` target)
+
+Assertion-based tests for the pure logic (graph construction, JSON/path parsing,
+hop-by-hop scoring, metrics aggregation, CSV logging, LLM response handling).
+They touch **neither Neo4j nor any LLM API**, so they run anywhere in seconds:
+
+```bash
+pip install -e ".[dev]"    # installs pytest
+pytest                     # runs tests/unit/ only (see pyproject testpaths)
+```
+
+## Top-level smoke scripts — manual, need a live backend
+
+The scripts directly under `tests/` are manual smoke checks. Each exercises one
+piece against a **live Neo4j** (see `.env`) and, where relevant, a **live LLM**
+(needs an API key), then prints what it got back. They are *not* collected by
+`pytest`; run them individually from the repo root with the project's Python:
 
 ```bash
 python tests/test_tools.py     # the 4 graph-query tools against the current graph

@@ -74,23 +74,20 @@ def regenerate(users: int, *, computers: int | None = None, groups: int | None =
 
 def pick_starts(database: str, n_random: int) -> list[dict]:
     """All planted-chain start users + N random users, each as {oid, name, kind}."""
-    driver = get_driver()
-    try:
-        planted = run_read(
-            driver,
-            "MATCH (u:User) WHERE u.planted = true "
-            "RETURN u.objectid AS oid, u.name AS name ORDER BY u.name",
-            database=database,
-        )
-        randoms = run_read(
-            driver,
-            "MATCH (u:User) WHERE coalesce(u.planted, false) = false "
-            "RETURN u.objectid AS oid, u.name AS name ORDER BY rand() LIMIT $k",
-            database=database,
-            k=n_random,
-        )
-    finally:
-        driver.close()
+    driver = get_driver()  # shared process-wide driver; closed at interpreter exit
+    planted = run_read(
+        driver,
+        "MATCH (u:User) WHERE u.planted = true "
+        "RETURN u.objectid AS oid, u.name AS name ORDER BY u.name",
+        database=database,
+    )
+    randoms = run_read(
+        driver,
+        "MATCH (u:User) WHERE coalesce(u.planted, false) = false "
+        "RETURN u.objectid AS oid, u.name AS name ORDER BY rand() LIMIT $k",
+        database=database,
+        k=n_random,
+    )
     return (
         [{**r, "kind": "planted"} for r in planted]
         + [{**r, "kind": "random"} for r in randoms]

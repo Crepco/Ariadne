@@ -2,7 +2,10 @@
 Graph query tools exposed to the LLM agent.
 
 Each function wraps a Cypher query so the agent never writes
-Cypher directly.
+Cypher directly. They all share the process-wide Neo4j driver
+(see ``ariadne.db.get_driver``) — the driver is never closed here,
+so a whole benchmark sweep reuses one connection pool instead of
+opening and tearing one down on every tool call.
 """
 
 from __future__ import annotations
@@ -21,8 +24,6 @@ def search_node(name_or_type: str, database: str | None = None):
         search_node("Computer")
     """
 
-    driver = get_driver()
-
     query = """
     MATCH (n)
     WHERE
@@ -37,23 +38,13 @@ def search_node(name_or_type: str, database: str | None = None):
     LIMIT 25
     """
 
-    try:
-        return run_read(
-            driver,
-            query,
-            database=database,
-            search=name_or_type,
-        )
-    finally:
-        driver.close()
+    return run_read(get_driver(), query, database=database, search=name_or_type)
 
 
 def query_outbound_edges(objectid: str, database: str | None = None):
     """
     Return everything this node can reach/control.
     """
-
-    driver = get_driver()
 
     query = """
     MATCH (n {objectid:$oid})-[r]->(m)
@@ -65,23 +56,13 @@ def query_outbound_edges(objectid: str, database: str | None = None):
     ORDER BY relationship,target
     """
 
-    try:
-        return run_read(
-            driver,
-            query,
-            database=database,
-            oid=objectid,
-        )
-    finally:
-        driver.close()
+    return run_read(get_driver(), query, database=database, oid=objectid)
 
 
 def query_inbound_edges(objectid: str, database: str | None = None):
     """
     Return everything that can reach/control this node.
     """
-
-    driver = get_driver()
 
     query = """
     MATCH (n)-[r]->(m {objectid:$oid})
@@ -93,15 +74,7 @@ def query_inbound_edges(objectid: str, database: str | None = None):
     ORDER BY relationship,source
     """
 
-    try:
-        return run_read(
-            driver,
-            query,
-            database=database,
-            oid=objectid,
-        )
-    finally:
-        driver.close()
+    return run_read(get_driver(), query, database=database, oid=objectid)
 
 
 def check_path_exists(
@@ -113,8 +86,6 @@ def check_path_exists(
     Verify whether an attack path exists between two objects.
     Returns the shortest path if one exists.
     """
-
-    driver = get_driver()
 
     rel_filter = "|".join(TRAVERSABLE_EDGES)
 
@@ -147,16 +118,12 @@ def check_path_exists(
         END AS hops
     """
 
-    try:
-        result = run_read(
-            driver,
-            query,
-            database=database,
-            start=start_objectid,
-            goal=goal_objectid,
-        )
+    result = run_read(
+        get_driver(),
+        query,
+        database=database,
+        start=start_objectid,
+        goal=goal_objectid,
+    )
 
-        return result[0] if result else None
-
-    finally:
-        driver.close()
+    return result[0] if result else None

@@ -20,6 +20,13 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["matplotlib>=3.7"]          # scaling plots (experiments/run_benchmark.py)
 gemini = ["google-genai>=1.0"]     # optional native Gemini backend
+dev = ["pytest>=8.0"]              # offline unit tests (tests/unit/)
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Only the offline unit suite runs by default. The scripts directly under
+# tests/ are manual smoke checks that need a live Neo4j + LLM key; run those
+# by hand (e.g. `python tests/test_tools.py`).
+testpaths = ["tests/unit"]
