@@ -23,7 +23,7 @@ _BOOL_COLS = [
     "matches_baseline", "optimal",
 ]
 _NUM_COLS = [
-    "graph_size", "agent_hops", "baseline_hops", "bloodhound_hops",
+    "graph_size", "agent_hops", "baseline_hops", "bloodhound_hops", "derived_steps",
     "tool_calls", "steps", "max_steps", "time_seconds",
     "prompt_tokens", "completion_tokens", "cost_usd",
 ]
@@ -106,8 +106,9 @@ def _overall(df: pd.DataFrame) -> dict:
     reachable = df[df["baseline_reachable"]]         # truly reachable (all edges)
     agent_miss = df[df["baseline_reachable"] & ~df["correct"]]
     # Cases the rule-based baseline can't reach but that ARE truly reachable —
-    # i.e. escalation requires advanced tradecraft.
+    # i.e. escalation requires advanced (inferred) tradecraft.
     advanced_required = df[df["baseline_reachable"] & ~df["bloodhound_reachable"]]
+    advanced_solved = advanced_required[advanced_required["correct"]]
     tokens = df["prompt_tokens"].fillna(0) + df["completion_tokens"].fillna(0)
     return {
         "runs": total,
@@ -126,6 +127,9 @@ def _overall(df: pd.DataFrame) -> dict:
         # BloodHound comparison
         "beats_bloodhound": int(df["beats_bloodhound"].sum()),
         "advanced_required": len(advanced_required),
+        "advanced_solved": len(advanced_solved),
+        "advanced_recall": (len(advanced_solved) / len(advanced_required))
+        if len(advanced_required) else float("nan"),
         # Cost / tokens
         "avg_tokens": tokens.mean() if total else float("nan"),
         "avg_cost": df["cost_usd"].mean() if total else float("nan"),
@@ -177,6 +181,9 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     print(f"Agent misses (truth)   : {o['agent_miss']}/{o['reachable']} truly-reachable cases missed")
     print(f"Beats BloodHound       : {o['beats_bloodhound']} run(s) found a real path the canonical "
           f"query misses  (of {o['advanced_required']} advanced-required case(s))")
+    if o["advanced_required"]:
+        print(f"Advanced-case recall   : {_pct(o['advanced_recall'])}  "
+              f"({o['advanced_solved']}/{o['advanced_required']} inference-only cases solved)")
     if not np.isnan(o["avg_cost"]):
         print(f"Avg tokens/run         : {o['avg_tokens']:.0f}")
         print(f"Cost (USD)             : ${o['avg_cost']:.4f}/run, ${o['total_cost']:.4f} total")
@@ -221,6 +228,7 @@ def metrics_markdown(path: Path = LOG_FILE) -> str:
         f"| Hallucination rate | {_pct(o['hallucination'])} |",
         f"| Optimal of paths found | {_pct(o['optimal_of_found'])} ({o['found']} found) |",
         f"| Beats BloodHound | {o['beats_bloodhound']} of {o['advanced_required']} advanced-required |",
+        f"| Advanced-case recall | {_pct(o['advanced_recall'])} ({o['advanced_solved']}/{o['advanced_required']}) |",
         f"| Avg tool calls (solved) | {o['avg_tool_calls_correct']:.2f} |",
         f"| Avg runtime (s) | {o['avg_time']:.2f} |",
         f"| Agent misses (of truly reachable) | {o['agent_miss']}/{o['reachable']} |",

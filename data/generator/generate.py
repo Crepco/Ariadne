@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from ariadne.config import DEFAULT_DOMAIN
+from ariadne.inference import true_reachable
 from ariadne.schema import (
     CANONICAL_EDGES,
     CONTROL_EDGES_ANY,
@@ -41,6 +42,7 @@ from ariadne.schema import (
     CONTROL_EDGES_USER,
     EXECUTION_EDGES,
     HIGH_VALUE_GROUPS,
+    INFERENCE_PROPERTIES,
     TRAVERSABLE_EDGES,
     WELL_KNOWN_GROUPS,
 )
@@ -135,11 +137,15 @@ def build_graph(
 
     # --- Users ---
     user_oids: list[str] = []
-    spn_users: list[str] = []          # kerberoastable service accounts
+    crackable_users: list[str] = []      # SPN accounts with a weak (crackable) password
     for i in range(n_users):
         oid = sid(rid)
         rid += 1
         hasspn = rng.random() < 0.08
+        # Only a subset of SPN accounts have a crackable (weak) password — those
+        # are the real kerberoast pivots. This is a PROPERTY, not an edge; the
+        # roast step is inferred from it (see ariadne.inference).
+        crackable = hasspn and rng.random() < 0.35
         nodes.append(
             _node(
                 "User",
@@ -149,39 +155,40 @@ def build_graph(
                     "domain": domain,
                     "enabled": True,
                     "hasspn": hasspn,
+                    "crackable": crackable,
                     "admincount": False,
                     "owned": False,
                 },
             )
         )
         user_oids.append(oid)
-        if hasspn:
-            spn_users.append(oid)
+        if crackable:
+            crackable_users.append(oid)
 
     # --- Computers ---
     comp_oids: list[str] = []
-    unconstrained_comps: list[str] = []   # abusable unconstrained-delegation hosts
+    comp_nodes: list[dict] = []          # node dicts, so we can tag roastable_target later
     n_dcs = max(1, n_computers // 40)
     for i in range(n_computers):
         oid = sid(rid)
         rid += 1
-        unconstrained = rng.random() < 0.05
-        nodes.append(
-            _node(
-                "Computer",
-                oid,
-                {
-                    "name": f"COMP{i:04d}.{domain}",
-                    "domain": domain,
-                    "enabled": True,
-                    "is_dc": i < n_dcs,
-                    "unconstraineddelegation": unconstrained,
-                },
-            )
+        # Unconstrained delegation is a PROPERTY; the coerce-and-impersonate step
+        # to domain dominance is inferred from it, not stored as an edge.
+        unconstrained = i >= n_dcs and rng.random() < 0.05   # non-DC hosts only
+        cnode = _node(
+            "Computer",
+            oid,
+            {
+                "name": f"COMP{i:04d}.{domain}",
+                "domain": domain,
+                "enabled": True,
+                "is_dc": i < n_dcs,
+                "unconstraineddelegation": unconstrained,
+            },
         )
+        nodes.append(cnode)
         comp_oids.append(oid)
-        if unconstrained:
-            unconstrained_comps.append(oid)
+        comp_nodes.append(cnode)
 
     all_groups = group_oids + list(special.values())
     principals = user_oids + all_groups
@@ -244,20 +251,17 @@ def build_graph(
     for p in rng.sample(principals, max(1, len(principals) // 250)):
         edges.add(_edge("DCSync", p, domain_oid))
 
-    # --- Advanced tradecraft edges (NOT part of BloodHound's canonical query) --
-    # These are real, exploitable primitives a reasoning agent can chain but a
-    # rule-based shortest-path baseline ignores. See schema.ADVANCED_EDGES.
-    #
-    # Kerberoastable: whoever holds `src` can request `svc`'s service ticket and
-    # crack it offline, taking over the service account.
-    for svc in spn_users:
-        src = rng.choice(principals)
-        if src != svc:
-            edges.add(_edge("Kerberoastable", src, svc))
-    # Unconstrained-delegation abuse: coerce a privileged account to authenticate
-    # to the host, capture its TGT, and escalate straight to domain dominance.
-    for comp in unconstrained_comps:
-        edges.add(_edge("UnconstrainedDelegationAbuse", comp, goal))
+    # Each crackable SPN account is exposed by one host computer (roastable_target
+    # PROPERTY, not an edge): reaching that host lets you roast the account. This
+    # keeps kerberoast a LOCAL inferred step, not a free jump from anywhere.
+    if comp_nodes:
+        for i, u in enumerate(crackable_users):
+            comp_nodes[i % len(comp_nodes)]["props"]["roastable_target"] = u
+
+    # NOTE: advanced tradecraft (kerberoast, unconstrained-delegation abuse) is
+    # NOT emitted as edges. It is derived at scoring/inference time from the
+    # `roastable_target` and `unconstraineddelegation` node properties, so a
+    # canonical edge-traversal query structurally cannot see it.
 
     graph: dict[str, Any] = {
         "nodes": nodes,
@@ -289,7 +293,7 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
     nodes: list[dict] = graph["nodes"]
     edges: set = graph["edges"]
 
-    def add_user(tag: str, rid: int, hasspn: bool = False) -> str:
+    def add_user(tag: str, rid: int, hasspn: bool = False, crackable: bool = False) -> str:
         oid = sid(rid)
         nodes.append(
             _node(
@@ -300,6 +304,7 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
                     "domain": domain,
                     "enabled": True,
                     "hasspn": hasspn,
+                    "crackable": crackable,
                     "admincount": False,
                     "owned": False,
                     "planted": True,
@@ -319,6 +324,27 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
                     "domain": domain,
                     "highvalue": False,
                     "admincount": False,
+                    "planted": True,
+                },
+            )
+        )
+        return oid
+
+    def add_computer(
+        tag: str, rid: int, roastable_target: str | None = None, unconstrained: bool = False
+    ) -> str:
+        oid = sid(rid)
+        nodes.append(
+            _node(
+                "Computer",
+                oid,
+                {
+                    "name": f"PLANT_{tag}.{domain}",
+                    "domain": domain,
+                    "enabled": True,
+                    "is_dc": False,
+                    "unconstraineddelegation": unconstrained,
+                    "roastable_target": roastable_target,
                     "planted": True,
                 },
             )
@@ -361,24 +387,46 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
         }
     )
 
-    # Chain C (advanced): Kerberoastable -> MemberOf -> GenericAll(DA).
-    # The pivotal first hop is advanced tradecraft, so BloodHound's canonical
-    # shortest-path query finds NO route from C_START (its only outbound edge is
-    # advanced), while an agent that knows kerberoasting reaches DA in 3 hops.
-    # This is a planted, known-answer "agent beats BloodHound" case.
+    # Chain C (advanced, INFERRED): AdminTo -> [kerberoast] -> MemberOf -> GenericAll.
+    # C_START admins C_HOST (canonical). C_HOST exposes the crackable service
+    # account C_SVC via a roastable_target PROPERTY — reaching the host lets you
+    # roast C_SVC, an INFERRED step, not an edge. BloodHound's canonical query
+    # reaches only C_HOST (a dead end), so it finds no route to DA, while an agent
+    # that reads the host's property escalates in 4 hops. The planted, known-answer
+    # "beats BloodHound" case; only the roast hop is non-canonical.
     e = add_user("C_START", PLANT_RID_BASE + 21)
-    f = add_user("C_SVC", PLANT_RID_BASE + 22, hasspn=True)
+    f = add_user("C_SVC", PLANT_RID_BASE + 22, hasspn=True, crackable=True)
+    host = add_computer("C_HOST", PLANT_RID_BASE + 24, roastable_target=f)
     g3 = add_group("C_MIDGROUP", PLANT_RID_BASE + 23)
-    edges.add(_edge("Kerberoastable", e, f))
+    edges.add(_edge("AdminTo", e, host))
     edges.add(_edge("MemberOf", f, g3))
     edges.add(_edge("GenericAll", g3, goal))
     graph["planted"].append(
         {
-            "name": "kerberoast_nested_genericall",
+            "name": "kerberoast_via_host_nested",
             "start": e,
-            "nodes": [e, f, g3, goal],
-            "edges": ["Kerberoastable", "MemberOf", "GenericAll"],
-            "hops": 3,
+            "nodes": [e, host, f, g3, goal],
+            "edges": ["AdminTo", "Kerberoast(inferred)", "MemberOf", "GenericAll"],
+            "hops": 4,
+            "advanced": True,
+        }
+    )
+
+    # Chain D (advanced, INFERRED): AdminTo -> [unconstrained delegation].
+    # D_START admins D_HOST (canonical), which is trusted for unconstrained
+    # delegation. Reaching it lets you coerce a DC and reach domain dominance — an
+    # INFERRED step from the `unconstraineddelegation` property, not an edge. The
+    # canonical query sees only the dead-end AdminTo, so it's BloodHound-blind.
+    h = add_user("D_START", PLANT_RID_BASE + 31)
+    dhost = add_computer("D_HOST", PLANT_RID_BASE + 32, unconstrained=True)
+    edges.add(_edge("AdminTo", h, dhost))
+    graph["planted"].append(
+        {
+            "name": "unconstrained_delegation_via_host",
+            "start": h,
+            "nodes": [h, dhost, goal],
+            "edges": ["AdminTo", "UnconstrainedDelegation(inferred)"],
+            "hops": 2,
             "advanced": True,
         }
     )
@@ -412,31 +460,41 @@ def _reachable(adj: dict[str, list[str]], start: str, goal: str) -> bool:
     return False
 
 
+def _props_map(graph: dict[str, Any]) -> dict[str, dict]:
+    """objectid -> the inference-relevant properties, for the rule oracle."""
+    return {
+        n["objectid"]: {k: n["props"].get(k) for k in INFERENCE_PROPERTIES}
+        for n in graph["nodes"]
+    }
+
+
 def solvability_report(graph: dict[str, Any], sample: int = 100) -> dict[str, Any]:
     """Estimate what fraction of users can reach Domain Admins.
 
-    Reports true reachability (all attack edges) and BloodHound-canonical
-    reachability (canonical edges only) so the "advanced-only" gap — users the
-    rule-based baseline can't reach but a reasoning agent can — is visible up
-    front.
+    Reports TRUE reachability (canonical edges + property-inferred steps, via
+    ``ariadne.inference``) and BloodHound-canonical reachability (canonical edges
+    only), so the "advanced-only" gap — users the rule-based baseline can't reach
+    but a reasoning agent can via inference — is visible up front.
     """
-    adj = _adjacency(graph)                                  # all edges = truth
     canon = _adjacency(graph, CANONICAL_EDGES)               # BloodHound baseline
+    props = _props_map(graph)
+    goal = graph["goal"]
+
+    def truly(u: str) -> bool:
+        return true_reachable(canon, props, u, goal)[0]
+
     users = graph["user_oids"]
     rng = random.Random(graph["seed"])
     picks = users if len(users) <= sample else rng.sample(users, sample)
-    solvable = sum(_reachable(adj, u, graph["goal"]) for u in picks)
-    canon_solvable = sum(_reachable(canon, u, graph["goal"]) for u in picks)
-    advanced_only = sum(
-        _reachable(adj, u, graph["goal"]) and not _reachable(canon, u, graph["goal"])
-        for u in picks
-    )
+    solvable = sum(truly(u) for u in picks)
+    canon_solvable = sum(_reachable(canon, u, goal) for u in picks)
+    advanced_only = sum(truly(u) and not _reachable(canon, u, goal) for u in picks)
     # Planted starts must always be truly solvable — sanity check the planting.
-    planted_ok = all(_reachable(adj, p["start"], graph["goal"]) for p in graph["planted"])
+    planted_ok = all(truly(p["start"]) for p in graph["planted"])
     # Advanced planted chains must be BloodHound-blind (canonical-unreachable),
     # otherwise the "beats BloodHound" case isn't actually testable.
     adv_blind = all(
-        not _reachable(canon, p["start"], graph["goal"])
+        not _reachable(canon, p["start"], goal)
         for p in graph["planted"]
         if p.get("advanced")
     )

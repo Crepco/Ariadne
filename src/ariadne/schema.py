@@ -9,22 +9,19 @@ The schema mirrors the legacy BloodHound data model closely enough that a graph
 built from it is structurally indistinguishable from a real SharpHound collection
 for attack-path reasoning purposes.
 
-**Canonical vs. advanced edges.** We split the attack-relevant edges into two
-tiers:
+**Edges vs. inference.** The graph — synthetic or ingested from a real BloodHound
+export — contains only ``CANONICAL_EDGES``: the primitives BloodHound's classic
+*"shortest path to Domain Admins"* Cypher query traverses. That query is the
+rule-based baseline.
 
-* ``CANONICAL_EDGES`` — the primitives BloodHound's classic *"shortest path to
-  Domain Admins"* Cypher query traverses. This is the rule-based baseline.
-* ``ADVANCED_EDGES`` — tradecraft that a canonical shortest-path query does *not*
-  encode but a reasoning agent can still chain: Kerberoasting a service account
-  and cracking it offline, or abusing unconstrained delegation to coerce and
-  impersonate. These are real edges in the graph; the agent's tools return them
-  and hop-by-hop scoring accepts them, but the BloodHound-equivalent baseline
-  ignores them.
-
-The agent (and the "true reachability" ground truth) traverse
-``TRAVERSABLE_EDGES = CANONICAL_EDGES + ADVANCED_EDGES``. The BloodHound baseline
-traverses only ``CANONICAL_EDGES``. That asymmetry is what makes it possible for
-the agent to find a *real* path the rule-based baseline misses.
+Advanced tradecraft (Kerberoasting a service account and cracking it offline;
+abusing unconstrained delegation) is deliberately **not** modelled as edges. It is
+derived from node **properties** (``hasspn`` + ``crackable``,
+``unconstraineddelegation``) by inference rules (see ``ariadne.inference``). Those
+steps are never written to Neo4j, so a pure edge-traversal query *structurally
+cannot* find them, while a reasoner can — and every inferred step is machine-
+checkable, so the agent can't fabricate one. That asymmetry is a property of the
+data model, not a filter choice, which is what makes it an honest comparison.
 """
 
 from __future__ import annotations
@@ -66,26 +63,25 @@ CANONICAL_EDGES = sorted(
     )
 )
 
-# --- Advanced relationship (edge) types -----------------------------------
-# Tradecraft the canonical shortest-path query does NOT encode, but a reasoning
-# agent can chain. Real edges the agent may traverse and scoring accepts.
-#   Kerberoastable            principal -> User(hasspn): request the SPN's
-#                             service ticket and crack it offline to take over
-#                             the service account.
-#   UnconstrainedDelegationAbuse
-#                             Computer(unconstrained) -> Group/Domain: coerce a
-#                             privileged account to authenticate to the host and
-#                             capture its TGT, escalating to domain dominance.
-ADVANCED_EDGES = ["Kerberoastable", "UnconstrainedDelegationAbuse"]
+# The graph only ever contains canonical edges. ``TRAVERSABLE_EDGES`` is kept as
+# an alias (= canonical) for call sites that ask "what edge types can appear in
+# the graph"; advanced tradecraft is NOT here — it lives in ariadne.inference as
+# property-based rules, never as edges.
+TRAVERSABLE_EDGES = list(CANONICAL_EDGES)
+ALL_EDGE_TYPES = list(CANONICAL_EDGES)
 
-# Everything the agent may traverse and hop-by-hop scoring will accept as a real
-# attack primitive: the canonical set PLUS the advanced tradecraft.
-TRAVERSABLE_EDGES = sorted(set(CANONICAL_EDGES + ADVANCED_EDGES))
-
-# Every edge type that may appear in the database (identical to TRAVERSABLE here,
-# but kept separate so non-traversable structural edges can be added later
-# without widening the attack surface).
-ALL_EDGE_TYPES = list(TRAVERSABLE_EDGES)
+# --- Node properties that drive inference rules ---------------------------
+# Advanced steps are derived from these properties (see ariadne.inference), not
+# from edges, so a canonical edge-traversal query cannot express them.
+#   hasspn                    User has a Service Principal Name -> kerberoastable.
+#   crackable                 The SPN account's password is weak enough to crack
+#                             offline (gates which kerberoastable accounts pivot).
+#   roastable_target          On a host Computer: object id of a crackable service
+#                             account it exposes. Reaching the host lets you roast
+#                             that account -> a LOCAL inferred step (not an edge).
+#   unconstraineddelegation   Computer trusted for unconstrained delegation ->
+#                             coerce a privileged login and reuse its ticket.
+INFERENCE_PROPERTIES = ["hasspn", "crackable", "roastable_target", "unconstraineddelegation"]
 
 # --- Well-known groups -----------------------------------------------------
 # RID -> display name, following real AD relative identifiers.
@@ -108,16 +104,14 @@ def _rel_filter(edges) -> str:
     return "|".join(edges)
 
 
-def cypher_rel_filter() -> str:
-    """Return the ``A|B|C`` filter over ALL traversable edges (agent / true reach).
-
-    Used to build ``shortestPath((s)-[:<filter>*1..N]->(g))`` so a traversal
-    follows every attack-relevant edge — canonical and advanced — and nothing
-    else.
-    """
-    return _rel_filter(TRAVERSABLE_EDGES)
-
-
 def canonical_rel_filter() -> str:
-    """Return the ``A|B|C`` filter over CANONICAL edges only (BloodHound baseline)."""
+    """Return the ``A|B|C`` filter over CANONICAL edges (the graph's only edges).
+
+    Used to build ``shortestPath((s)-[:<filter>*1..N]->(g))`` for the BloodHound
+    baseline. Advanced steps are handled separately by ``ariadne.inference``.
+    """
     return _rel_filter(CANONICAL_EDGES)
+
+
+# Back-compat alias: the graph contains only canonical edges, so the two are equal.
+cypher_rel_filter = canonical_rel_filter

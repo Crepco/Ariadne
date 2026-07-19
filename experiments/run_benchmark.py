@@ -46,6 +46,7 @@ from ariadne.evaluation.score import ScoringContext, score_agent_result  # noqa:
 
 REPO = Path(__file__).resolve().parents[1]
 GEN = REPO / "data" / "generator" / "generate.py"
+INGEST = REPO / "data" / "ingest" / "bloodhound.py"
 RESULTS_DIR = REPO / "results"
 LOCK = REPO / "experiments" / ".benchmark.lock"
 
@@ -71,6 +72,17 @@ def regenerate(users: int, *, computers: int | None = None, groups: int | None =
         print(proc.stdout)
         print(proc.stderr)
         raise RuntimeError(f"generator failed for users={users}")
+
+
+def ingest_export(path: str) -> None:
+    """Load a real BloodHound export into Neo4j (single graph, no size sweep)."""
+    cmd = [sys.executable, str(INGEST), "--from", path, "--wipe"]
+    print(f"\n>> ingesting BloodHound export: {path}")
+    proc = subprocess.run(cmd, cwd=str(REPO), capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(proc.stdout)
+        print(proc.stderr)
+        raise RuntimeError(f"ingest failed for {path}")
 
 
 def pick_starts(database: str, n_random: int, seed: int = 1337) -> list[dict]:
@@ -148,11 +160,21 @@ def main() -> None:
     ap.add_argument("--max-steps", type=int, default=None,
                     help="agent reasoning-step budget per run (default: the loop's MAX_STEPS)")
     ap.add_argument("--seed", type=int, default=1337, help="seed for random start-user selection")
+    ap.add_argument("--from", dest="source_export", default=None,
+                    help="run on a real BloodHound export (dir/zip) instead of the synthetic sweep")
     ap.add_argument("--no-restore", action="store_true", help="don't rebuild the default graph at the end")
     args = ap.parse_args()
 
     from ariadne.agent.loop import MAX_STEPS
     max_steps = args.max_steps if args.max_steps is not None else MAX_STEPS
+
+    # Either sweep synthetic sizes, or run once on an ingested BloodHound export.
+    if args.source_export:
+        setups = [("bloodhound", lambda: ingest_export(args.source_export))]
+        restore = False
+    else:
+        setups = [(str(u), (lambda u=u: regenerate(u))) for u in args.sizes]
+        restore = not args.no_restore
 
     # Guard against a second benchmark running concurrently: both would wipe and
     # rewrite the SAME database and the same results.csv, clobbering each other.
@@ -167,8 +189,8 @@ def main() -> None:
     run_idx = 0
 
     try:
-        for users in args.sizes:
-            regenerate(users)
+        for _label, setup in setups:
+            setup()
             ctx = ScoringContext.load()
             graph_size = len(ctx.oids)
             starts = pick_starts(ctx.database, args.random, args.seed)
@@ -203,7 +225,7 @@ def main() -> None:
         print(f"Wrote {RESULTS_DIR / 'metrics.md'}")
         print(f"Log: {LOG_FILE}")
 
-        if not args.no_restore:
+        if restore:
             print("\nRestoring default graph ...")
             regenerate(DEFAULT_USERS, computers=60, groups=40)
             print("Default graph restored.")

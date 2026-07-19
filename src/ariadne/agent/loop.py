@@ -52,12 +52,13 @@ FIRST call search_node to resolve a name to its object id, then follow edges fro
 that id. Your very first action should resolve the starting node.
 
 You have at most {max_steps} steps. Explore efficiently: from the start's object
-id, follow query_outbound_edges hop by hop toward DOMAIN ADMINS. If forward
-progress stalls, resolve DOMAIN ADMINS with search_node and work BACKWARD with
-query_inbound_edges from its id to meet in the middle. You may confirm a full
-chain with check_path_exists.
+id, follow query_outbound_edges hop by hop toward DOMAIN ADMINS. When you reach a
+Computer or hit a dead end, call get_node_properties on it — a `roastable_target`
+or `unconstraineddelegation` property is an INFERRED step (not an edge) that can
+continue toward DOMAIN ADMINS. If forward progress stalls, resolve DOMAIN ADMINS
+with search_node and work BACKWARD with query_inbound_edges from its id.
 
-Available tools: search_node, query_outbound_edges, query_inbound_edges, check_path_exists
+Available tools: search_node, query_outbound_edges, query_inbound_edges, get_node_properties, check_path_exists
 
 Respond with ONE JSON object per turn.
 

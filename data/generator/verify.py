@@ -2,10 +2,11 @@
 
 After generate.py has written a graph, run this to:
   1. confirm node/edge counts loaded correctly, and
-  2. compute the ground-truth shortest path from sample users to Domain Admins
-     using shortestPath over ALL attack edges (canonical + advanced) — the TRUE
-     reachability the agent is scored against. (The canonical-only subset is the
-     separate BloodHound baseline; see evaluation/score.py.)
+  2. compute the shortest path from sample users to Domain Admins over the
+     canonical edges — i.e. the BloodHound-equivalent baseline path. (Property-
+     inferred steps are not edges, so they don't appear here; TRUE reachability
+     that includes inference is computed by the scorer — see evaluation/score.py
+     and ariadne/inference.py.)
 
 Usage (repo root, venv active)::
 

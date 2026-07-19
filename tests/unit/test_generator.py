@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import generate
-from ariadne.schema import ADVANCED_EDGES, CANONICAL_EDGES, GOAL_GROUP, TRAVERSABLE_EDGES
+from ariadne.inference import true_reachable
+from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, TRAVERSABLE_EDGES
 
 
 def _build(**kw):
@@ -49,7 +50,8 @@ def test_planted_chains_are_reachable_and_declared():
     assert names == {
         "forcechange_nested_genericall",
         "genericwrite_addmember_nested",
-        "kerberoast_nested_genericall",
+        "kerberoast_via_host_nested",
+        "unconstrained_delegation_via_host",
     }
     report = generate.solvability_report(graph)
     assert report["planted_chains_reachable"] is True
@@ -67,36 +69,43 @@ def test_no_plant_option_leaves_no_planted_chains():
     assert graph["planted"] == []
 
 
-# --- advanced primitives / BloodHound-blind chain --------------------------
+# --- advanced tradecraft is properties, not edges --------------------------
 def _edge_types(graph):
     return {etype for etype, _, _ in graph["edges"]}
 
 
-def test_advanced_edges_are_emitted():
-    # A graph big enough to contain SPN users and unconstrained-delegation hosts.
+def test_no_advanced_edges_only_canonical():
+    # The graph must contain ONLY canonical edges; advanced steps are inferred
+    # from properties, never materialized as edges.
     graph = generate.build_graph(n_users=200, n_computers=40, n_groups=20, seed=1337)
-    present = _edge_types(graph)
-    assert "Kerberoastable" in present
-    assert set(ADVANCED_EDGES) <= set(TRAVERSABLE_EDGES)
+    assert _edge_types(graph) <= set(CANONICAL_EDGES)
+    assert "Kerberoastable" not in _edge_types(graph)
+    assert "UnconstrainedDelegationAbuse" not in _edge_types(graph)
 
 
-def test_advanced_chain_is_planted_and_flagged():
+def test_inference_properties_present():
+    graph = generate.build_graph(n_users=200, n_computers=40, n_groups=20, seed=1337)
+    props = [n["props"] for n in graph["nodes"]]
+    assert any(p.get("crackable") for p in props)                   # crackable SPN users
+    assert any(p.get("roastable_target") for p in props)            # hosts exposing them
+
+
+def test_advanced_chains_are_planted_and_flagged():
     graph = _build()
-    advanced = [p for p in graph["planted"] if p.get("advanced")]
-    assert len(advanced) == 1
-    chain = advanced[0]
-    assert chain["name"] == "kerberoast_nested_genericall"
-    assert chain["edges"][0] == "Kerberoastable"
+    advanced = {p["name"] for p in graph["planted"] if p.get("advanced")}
+    assert advanced == {"kerberoast_via_host_nested", "unconstrained_delegation_via_host"}
 
 
-def test_advanced_chain_is_bloodhound_blind_but_truly_reachable():
+def test_advanced_chains_bloodhound_blind_but_truly_reachable():
     graph = _build()
-    chain = next(p for p in graph["planted"] if p.get("advanced"))
-    start, goal = chain["start"], graph["goal"]
-    truth = generate._adjacency(graph)                       # all edges
-    canonical = generate._adjacency(graph, CANONICAL_EDGES)  # BloodHound baseline
-    assert generate._reachable(truth, start, goal) is True
-    assert generate._reachable(canonical, start, goal) is False
+    goal = graph["goal"]
+    canonical = generate._adjacency(graph, CANONICAL_EDGES)   # BloodHound baseline
+    props = generate._props_map(graph)
+    for chain in [p for p in graph["planted"] if p.get("advanced")]:
+        start = chain["start"]
+        # Truly reachable via property inference, but canonical-blind.
+        assert true_reachable(canonical, props, start, goal)[0] is True
+        assert generate._reachable(canonical, start, goal) is False
 
 
 def test_solvability_report_flags_advanced_gap():

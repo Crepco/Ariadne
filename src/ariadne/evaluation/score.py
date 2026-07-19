@@ -1,16 +1,18 @@
-"""Scoring for one agent run.
+"""Scoring for one agent run — and the verifier the whole project rests on.
 
 Two things are measured:
 
-1. **Is the agent's proposed path real?** We parse the ordered nodes the agent
-   claims and verify *each consecutive hop* against the graph. A claimed hop with
-   no matching edge (or an unresolvable node) is a hallucination. This is the part
-   the old ``score_run`` never did — it only checked start→goal reachability.
+1. **Is the agent's proposed path real?** We verify *each consecutive hop*: it must
+   be either a real canonical **edge** in the graph OR a property-justified
+   **inferred** step (``ariadne.inference``). A hop that is neither — or an
+   unresolvable node — is a hallucination. ``hop_kind`` makes that call, and it is
+   the same gate the chat assistant uses to refuse unverifiable claims.
 
-2. **How does it compare to BloodHound?** The ground-truth shortest path over the
-   same traversable edge set is our BloodHound-equivalent baseline. We record
-   whether the baseline is reachable, its hop count, and whether the agent matched
-   or found the optimal-length path.
+2. **How does it compare to BloodHound?** ``baseline`` is TRUE reachability
+   (canonical edges + inference); ``bloodhound`` is the canonical-only shortest
+   path a rule-based query would find. When the agent's verified path uses an
+   inferred step and the canonical query finds nothing, it ``beats_bloodhound`` —
+   a structural fact, since inferred steps are not edges in the collected graph.
 
 ``score_run`` (simple reachability) is kept for backward compatibility.
 """
@@ -22,11 +24,13 @@ from dataclasses import dataclass, field
 
 from ariadne.config import load_neo4j_config
 from ariadne.db import get_driver, run_read
-from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, TRAVERSABLE_EDGES
+from ariadne.inference import INFERENCE_RULES, justifies_hop, true_reachable
+from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, INFERENCE_PROPERTIES
 from ariadne.tools import check_path_exists
 
 _ARROW = re.compile(r"->|=>|→")
-_EDGE_SET = {e.upper() for e in TRAVERSABLE_EDGES}
+# Tokens that are edge/rule labels, not nodes, so path parsing drops them.
+_EDGE_SET = {e.upper() for e in CANONICAL_EDGES} | {r.upper() for r in INFERENCE_RULES}
 
 
 # --------------------------------------------------------------------------
@@ -60,9 +64,12 @@ class ScoringContext:
     database: str
     goal_oid: str | None
     name_to_oid: dict = field(default_factory=dict)
+    names: dict = field(default_factory=dict)          # oid -> display name
     oids: set = field(default_factory=set)
-    rel_filter: str = ""            # ALL traversable edges (agent / true reach)
-    canonical_filter: str = ""      # canonical edges only (BloodHound baseline)
+    props: dict = field(default_factory=dict)          # oid -> inference properties
+    canonical_adj: dict = field(default_factory=dict)  # oid -> [canonical successors]
+    edge_types: dict = field(default_factory=dict)     # (a,b) -> canonical edge type
+    canonical_filter: str = ""                          # canonical edges only (BloodHound)
 
     @classmethod
     def load(cls) -> "ScoringContext":
@@ -70,15 +77,22 @@ class ScoringContext:
         driver = get_driver()
 
         name_to_oid: dict[str, str] = {}
+        names: dict[str, str] = {}
         oids: set[str] = set()
+        props: dict[str, dict] = {}
+        prop_cols = ", ".join(f"n.{p} AS {p}" for p in INFERENCE_PROPERTIES)
         for row in run_read(
-            driver, "MATCH (n) RETURN n.objectid AS oid, n.name AS name", database=database
+            driver,
+            f"MATCH (n) RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
+            database=database,
         ):
             oid, name = row["oid"], row["name"]
             if not oid:
                 continue
             oids.add(oid)
+            props[oid] = {p: row.get(p) for p in INFERENCE_PROPERTIES}
             if name:
+                names[oid] = name
                 name_to_oid[name.upper()] = oid
                 name_to_oid[name.split("@")[0].upper()] = oid  # short name too
 
@@ -90,17 +104,25 @@ class ScoringContext:
         )
         goal_oid = goal_rows[0]["oid"] if goal_rows else None
 
-        present = {
-            r["t"]
-            for r in run_read(
-                driver,
-                "CALL db.relationshipTypes() YIELD relationshipType AS t RETURN t",
-                database=database,
-            )
-        }
-        rel_filter = "|".join(e for e in TRAVERSABLE_EDGES if e in present)
+        # Canonical edges: build adjacency + (a,b)->type once, and the present-type
+        # filter for the BloodHound Cypher baseline.
+        canonical_adj: dict[str, list[str]] = {}
+        edge_types: dict[tuple[str, str], str] = {}
+        present: set[str] = set()
+        for row in run_read(
+            driver,
+            "MATCH (a)-[r]->(b) WHERE type(r) IN $canon "
+            "RETURN a.objectid AS a, type(r) AS t, b.objectid AS b",
+            database=database,
+            canon=list(CANONICAL_EDGES),
+        ):
+            a, b, t = row["a"], row["b"], row["t"]
+            canonical_adj.setdefault(a, []).append(b)
+            edge_types[(a, b)] = t
+            present.add(t)
         canonical_filter = "|".join(e for e in CANONICAL_EDGES if e in present)
-        return cls(driver, database, goal_oid, name_to_oid, oids, rel_filter, canonical_filter)
+        return cls(driver, database, goal_oid, name_to_oid, names, oids, props,
+                   canonical_adj, edge_types, canonical_filter)
 
     def close(self) -> None:
         # The driver is the process-wide shared instance (ariadne.db), so we do
@@ -115,26 +137,32 @@ class ScoringContext:
             return t
         return self.name_to_oid.get(t.upper())
 
-    def edge_between(self, a_oid: str, b_oid: str):
-        """Return the type of a direct traversable edge a->b, or None."""
-        rows = run_read(
-            self.driver,
-            "MATCH (a {objectid:$a})-[r]->(b {objectid:$b}) "
-            "WHERE type(r) IN $edges RETURN type(r) AS e LIMIT 1",
-            database=self.database,
-            a=a_oid,
-            b=b_oid,
-            edges=list(TRAVERSABLE_EDGES),
-        )
-        return rows[0]["e"] if rows else None
+    def hop_kind(self, a_oid: str, b_oid: str):
+        """Classify the step a->b: ('edge', type) for a real canonical edge,
+        ('inferred', rule) for a property-justified step, or None if neither
+        (which the verifier counts as a hallucination)."""
+        t = self.edge_types.get((a_oid, b_oid))
+        if t is not None:
+            return ("edge", t)
+        rule = justifies_hop(self.props, a_oid, b_oid, self.goal_oid)
+        if rule is not None:
+            return ("inferred", rule)
+        return None
 
-    def _shortest(self, start_oid: str, rel_filter: str) -> dict:
-        """Shortest path start -> Domain Admins over the given edge-type filter."""
-        if not self.goal_oid or not rel_filter:
+    def baseline(self, start_oid: str) -> dict:
+        """TRUE ground truth: shortest path over canonical edges PLUS property-
+        inferred steps. This is what the agent is *actually* scored against."""
+        reachable, hops = true_reachable(self.canonical_adj, self.props, start_oid, self.goal_oid)
+        return {"reachable": reachable, "hops": hops}
+
+    def bloodhound(self, start_oid: str) -> dict:
+        """BloodHound-equivalent: shortest path over CANONICAL edges only — what a
+        rule-based shortest-path query finds, with no property inference."""
+        if not self.goal_oid or not self.canonical_filter:
             return {"reachable": False, "hops": -1}
         q = (
             f"MATCH (s {{objectid:$s}}), (g {{objectid:$g}}) "
-            f"OPTIONAL MATCH p = shortestPath((s)-[:{rel_filter}*1..15]->(g)) "
+            f"OPTIONAL MATCH p = shortestPath((s)-[:{self.canonical_filter}*1..15]->(g)) "
             f"RETURN p IS NOT NULL AS reachable, "
             f"CASE WHEN p IS NULL THEN -1 ELSE length(p) END AS hops"
         )
@@ -142,16 +170,6 @@ class ScoringContext:
         if not rows:
             return {"reachable": False, "hops": -1}
         return {"reachable": bool(rows[0]["reachable"]), "hops": rows[0]["hops"]}
-
-    def baseline(self, start_oid: str) -> dict:
-        """TRUE ground truth: shortest path over ALL attack edges (canonical +
-        advanced). This is what the agent is *actually* scored against."""
-        return self._shortest(start_oid, self.rel_filter)
-
-    def bloodhound(self, start_oid: str) -> dict:
-        """BloodHound-equivalent: shortest path over CANONICAL edges only — what a
-        rule-based shortest-path query would find, ignoring advanced tradecraft."""
-        return self._shortest(start_oid, self.canonical_filter)
 
 
 # --------------------------------------------------------------------------
@@ -162,13 +180,18 @@ def verify_path(ctx: ScoringContext, tokens: list[str], expected_start_oid: str 
     unresolved = [t for t, o in zip(tokens, resolved) if o is None]
 
     hop_edges = []
+    derived_steps = 0
     connected = len(tokens) >= 2 and not unresolved
     if connected:
         for a, b in zip(resolved, resolved[1:]):
-            edge = ctx.edge_between(a, b)
-            hop_edges.append({"from": a, "to": b, "edge": edge})
-            if edge is None:
+            kind = ctx.hop_kind(a, b)               # ('edge',t) | ('inferred',rule) | None
+            label = kind[1] if kind else None
+            inferred = bool(kind) and kind[0] == "inferred"
+            hop_edges.append({"from": a, "to": b, "edge": label, "inferred": inferred})
+            if kind is None:
                 connected = False
+            elif inferred:
+                derived_steps += 1
 
     reaches_goal = bool(resolved) and resolved[-1] == ctx.goal_oid
     starts_ok = expected_start_oid is None or (bool(resolved) and resolved[0] == expected_start_oid)
@@ -182,6 +205,8 @@ def verify_path(ctx: ScoringContext, tokens: list[str], expected_start_oid: str 
         "starts_ok": starts_ok,
         "unresolved": unresolved,
         "hop_edges": hop_edges,
+        "derived_steps": derived_steps,        # inferred (non-edge) hops used
+        "uses_derived": derived_steps > 0,
     }
 
 
@@ -208,6 +233,7 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
             "declared_no_path": False,
             "incomplete": True,
             "agent_hops": -1,
+            "derived_steps": 0,
             "baseline_reachable": base["reachable"],
             "baseline_hops": base["hops"],
             "bloodhound_reachable": bh["reachable"],
@@ -224,6 +250,7 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         path_valid = False
         hallucinated = False
         agent_hops = -1
+        derived_steps = 0
         # "correct" = agent was right to give up (no TRUE path exists either)
         correct = not base["reachable"]
     else:
@@ -231,12 +258,13 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         path_valid = v["valid"]
         hallucinated = v["hallucinated"]
         agent_hops = v["hops"]
+        derived_steps = v["derived_steps"]
         correct = v["valid"] and base["reachable"]
 
-    # The headline "vs BloodHound" result: the agent found a REAL path where the
-    # rule-based canonical shortest-path query finds none (i.e. the route needs
-    # advanced tradecraft). Only counts when the agent's path is genuinely valid.
-    beats_bloodhound = bool(path_valid and not bh["reachable"])
+    # The headline "vs BloodHound" result: the agent found a REAL path that uses at
+    # least one INFERRED step (not in the collected graph as an edge) where the
+    # canonical shortest-path query finds none. Structural — not a filter choice.
+    beats_bloodhound = bool(path_valid and derived_steps > 0 and not bh["reachable"])
 
     return {
         "proposed_path": answer,
@@ -246,6 +274,7 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         "declared_no_path": declared_no_path,
         "incomplete": False,
         "agent_hops": agent_hops,
+        "derived_steps": derived_steps,
         "baseline_reachable": base["reachable"],
         "baseline_hops": base["hops"],
         "bloodhound_reachable": bh["reachable"],

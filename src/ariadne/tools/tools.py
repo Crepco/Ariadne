@@ -59,6 +59,36 @@ def query_outbound_edges(objectid: str, database: str | None = None):
     return run_read(get_driver(), query, database=database, oid=objectid)
 
 
+def get_node_properties(objectid: str, database: str | None = None):
+    """
+    Return a node's properties — including the ones that enable *inferred*
+    attack steps that are NOT edges:
+      hasspn / crackable       -> a kerberoastable, weak-password service account
+      roastable_target         -> (on a host) the object id of a crackable account
+                                  it exposes; reaching the host lets you roast it
+      unconstraineddelegation  -> (on a host) coerce a login for domain dominance
+    """
+
+    query = """
+    MATCH (n {objectid:$oid})
+    RETURN
+        labels(n) AS labels,
+        n.name AS name,
+        n.objectid AS objectid,
+        n.hasspn AS hasspn,
+        n.crackable AS crackable,
+        n.roastable_target AS roastable_target,
+        n.unconstraineddelegation AS unconstraineddelegation,
+        n.admincount AS admincount,
+        n.highvalue AS highvalue,
+        n.is_dc AS is_dc,
+        n.enabled AS enabled
+    """
+
+    rows = run_read(get_driver(), query, database=database, oid=objectid)
+    return rows[0] if rows else None
+
+
 def query_inbound_edges(objectid: str, database: str | None = None):
     """
     Return everything that can reach/control this node.

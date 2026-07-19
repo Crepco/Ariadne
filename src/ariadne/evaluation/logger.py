@@ -27,7 +27,8 @@ FIELDS = [
     "declared_no_path",
     "incomplete",
     "agent_hops",
-    "baseline_reachable",     # TRUE reachability over all attack edges
+    "derived_steps",          # inferred (non-edge) hops the agent's path used
+    "baseline_reachable",     # TRUE reachability (canonical edges + inference)
     "baseline_hops",
     "bloodhound_reachable",   # canonical-only reachability (rule-based baseline)
     "bloodhound_hops",

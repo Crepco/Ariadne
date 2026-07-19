@@ -22,6 +22,9 @@ viz = ["matplotlib>=3.7"]          # scaling plots (experiments/run_benchmark.py
 gemini = ["google-genai>=1.0"]     # optional native Gemini backend
 dev = ["pytest>=8.0"]              # offline unit tests (tests/unit/)
 
+[project.scripts]
+ariadne-chat = "ariadne.chat:main"   # grounded AD security chat assistant
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

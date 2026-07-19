@@ -2,29 +2,30 @@
 
 | Metric | Value |
 | --- | --- |
-| Runs | 27 |
-| Correctness | 70.4% |
-| Valid-path rate | 70.4% |
-| Hallucination rate | 29.6% |
+| Runs | 30 |
+| Correctness | 63.3% |
+| Valid-path rate | 63.3% |
+| Hallucination rate | 20.0% |
 | Optimal of paths found | 100.0% (19 found) |
-| Beats BloodHound | 3 of 5 advanced-required |
-| Avg tool calls (solved) | 3.53 |
-| Avg runtime (s) | 17.73 |
-| Agent misses (of truly reachable) | 6/25 |
-| Cost (USD) | $0.0011/run, $0.0284 total |
+| Beats BloodHound | 3 of 9 advanced-required |
+| Advanced-case recall | 33.3% (3/9) |
+| Avg tool calls (solved) | 3.58 |
+| Avg runtime (s) | 18.62 |
+| Agent misses (of truly reachable) | 11/30 |
+| Cost (USD) | $0.0013/run, $0.0390 total |
 
 ### Scaling by graph size
 
 | Nodes | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 213 | 9 | 66.7% | 33.3% | 1 | 5.0 | 19.84 |
-| 478 | 9 | 66.7% | 33.3% | 1 | 4.7 | 17.55 |
-| 810 | 9 | 77.8% | 22.2% | 1 | 4.2 | 15.80 |
+| 216 | 10 | 60.0% | 20.0% | 1 | 5.3 | 18.31 |
+| 481 | 10 | 70.0% | 20.0% | 1 | 4.8 | 17.17 |
+| 813 | 10 | 60.0% | 20.0% | 1 | 6.1 | 20.38 |
 
 ### Failure-mode breakdown by graph size
 
 | Nodes | correct | hallucinated | gave up (path existed) | ran out of steps | wrong path |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 213 | 6 | 3 | 0 | 0 | 0 |
-| 478 | 6 | 3 | 0 | 0 | 0 |
-| 810 | 7 | 2 | 0 | 0 | 0 |
+| 216 | 6 | 2 | 2 | 0 | 0 |
+| 481 | 7 | 2 | 1 | 0 | 0 |
+| 813 | 6 | 2 | 2 | 0 | 0 |
