@@ -3,8 +3,9 @@
 After generate.py has written a graph, run this to:
   1. confirm node/edge counts loaded correctly, and
   2. compute the ground-truth shortest path from sample users to Domain Admins
-     using the same Cypher shortestPath BloodHound uses. That result is the
-     answer key the LLM agent is scored against.
+     using shortestPath over ALL attack edges (canonical + advanced) — the TRUE
+     reachability the agent is scored against. (The canonical-only subset is the
+     separate BloodHound baseline; see evaluation/score.py.)
 
 Usage (repo root, venv active)::
 

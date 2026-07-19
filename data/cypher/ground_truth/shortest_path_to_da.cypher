@@ -1,7 +1,10 @@
-// Ground-truth shortest attack path from a starting principal to Domain Admins.
-// This is the "BloodHound-equivalent" baseline and the answer key the agent is
-// scored against. The relationship filter must match ariadne.schema.TRAVERSABLE_EDGES;
-// verify.py builds this query programmatically so the two never drift apart.
+// BloodHound-equivalent shortest attack path from a starting principal to Domain
+// Admins. This is the rule-based baseline: its relationship filter is exactly
+// ariadne.schema.CANONICAL_EDGES (the primitives a canonical shortest-path query
+// encodes). The agent — and Ariadne's TRUE-reachability ground truth — traverse a
+// wider set (schema.TRAVERSABLE_EDGES = canonical + ADVANCED_EDGES such as
+// Kerberoastable), so the agent can find real paths this query cannot. score.py
+// builds both filters programmatically so they never drift from the schema.
 //
 // Parameters:
 //   $start  objectid of the starting node (e.g. a phished user)

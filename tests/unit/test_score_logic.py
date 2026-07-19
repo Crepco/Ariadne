@@ -18,15 +18,23 @@ from ariadne.evaluation.score import (
 
 
 class FakeCtx:
-    """In-memory stand-in for ScoringContext (no database)."""
+    """In-memory stand-in for ScoringContext (no database).
 
-    def __init__(self, edges, name_to_oid, goal_oid, reachable=True, hops=3):
+    ``bloodhound`` reachability defaults to mirror ``baseline`` (true reachability)
+    unless overridden, letting tests model the "advanced-only path" case where the
+    route truly exists but the canonical BloodHound query can't find it.
+    """
+
+    def __init__(self, edges, name_to_oid, goal_oid, reachable=True, hops=3,
+                 bh_reachable=None, bh_hops=None):
         self._edges = dict(edges)            # (a_oid, b_oid) -> edge type
         self.name_to_oid = {k.upper(): v for k, v in name_to_oid.items()}
         self.oids = set(name_to_oid.values())
         self.goal_oid = goal_oid
         self._reachable = reachable
         self._hops = hops
+        self._bh_reachable = reachable if bh_reachable is None else bh_reachable
+        self._bh_hops = hops if bh_hops is None else bh_hops
 
     def resolve(self, token):
         t = (token or "").strip()
@@ -39,6 +47,9 @@ class FakeCtx:
 
     def baseline(self, start_oid):
         return {"reachable": self._reachable, "hops": self._hops}
+
+    def bloodhound(self, start_oid):
+        return {"reachable": self._bh_reachable, "hops": self._bh_hops}
 
 
 def _abc_ctx(**kw):
@@ -137,3 +148,35 @@ def test_score_hallucinated_path_is_wrong():
     score = score_agent_result(_abc_ctx(reachable=True, hops=2), result, "A")
     assert score["hallucinated_edge"] is True
     assert score["correct"] is False
+
+
+def test_score_beats_bloodhound_when_path_is_canonical_blind():
+    # Truly reachable, but the canonical BloodHound query finds nothing — the
+    # agent's real path beats the rule-based baseline.
+    result = SimpleNamespace(
+        answer="A -> B -> DOMAIN ADMINS", path_field=["A", "B", "DOMAIN ADMINS"], finished=True
+    )
+    ctx = _abc_ctx(reachable=True, hops=2, bh_reachable=False, bh_hops=-1)
+    score = score_agent_result(ctx, result, "A")
+    assert score["correct"] is True
+    assert score["bloodhound_reachable"] is False
+    assert score["beats_bloodhound"] is True
+
+
+def test_score_does_not_beat_bloodhound_when_canonical_also_reaches():
+    result = SimpleNamespace(
+        answer="A -> B -> DOMAIN ADMINS", path_field=["A", "B", "DOMAIN ADMINS"], finished=True
+    )
+    ctx = _abc_ctx(reachable=True, hops=2, bh_reachable=True, bh_hops=2)
+    score = score_agent_result(ctx, result, "A")
+    assert score["beats_bloodhound"] is False
+
+
+def test_score_no_beat_credit_for_hallucinated_path():
+    # A fabricated path must never count as beating BloodHound.
+    result = SimpleNamespace(
+        answer="A -> DOMAIN ADMINS", path_field=["A", "DOMAIN ADMINS"], finished=True
+    )
+    ctx = _abc_ctx(reachable=True, hops=2, bh_reachable=False, bh_hops=-1)
+    score = score_agent_result(ctx, result, "A")
+    assert score["beats_bloodhound"] is False

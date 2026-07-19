@@ -7,8 +7,12 @@ Two backends:
   limits; the model is configurable via ``OPENROUTER_MODEL`` or ``set_model()``.
 * **Gemini** (native free tier) — throttled to stay under 15 requests/min.
 
-``ask_llm(prompt)`` is the single entry point; ``active_model()`` reports which model
-is live (for logging) and ``set_model()`` switches it (for multi-model benchmarks).
+``chat(messages)`` is the primary entry point: it takes role-tagged messages
+(``system`` / ``user`` / ``assistant``) and returns an :class:`LLMResult` carrying
+the completion text plus token/cost usage. ``ask_llm(prompt)`` is a thin
+single-turn wrapper that returns just the text. ``active_model()`` reports which
+model is live (for logging) and ``set_model()`` switches it (for multi-model
+benchmarks).
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import re
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 
 import requests
 from dotenv import load_dotenv
@@ -28,6 +33,19 @@ load_dotenv()
 
 class LLMError(RuntimeError):
     """Raised when the model can't be reached after exhausting retries."""
+
+
+@dataclass
+class LLMResult:
+    """A single completion plus its usage accounting."""
+
+    text: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+Message = dict  # {"role": "system"|"user"|"assistant", "content": str}
 
 
 # --------------------------------------------------------------------------
@@ -61,12 +79,22 @@ def active_model() -> str:
 
 
 def set_model(model: str, provider: str | None = None) -> None:
-    """Switch the model ask_llm uses. Infers the provider from the slug shape
+    """Switch the model chat/ask_llm uses. Infers the provider from the slug shape
     (``vendor/model`` -> OpenRouter) unless one is given explicitly."""
     global MODEL_NAME
     _state["model"] = model
     _state["provider"] = provider or ("openrouter" if "/" in model else "gemini")
     MODEL_NAME = model
+
+
+def _messages_to_prompt(messages: list[Message]) -> str:
+    """Flatten role-tagged messages into a single prompt string (Gemini path)."""
+    parts = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        parts.append(f"Assistant: {content}" if role == "assistant" else content)
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -77,25 +105,44 @@ def _next_key() -> str:
         return next(_key_cycle)
 
 
-def _extract_content(resp) -> str | None:
-    """Pull the completion text out of a 200 response, or None if it's malformed.
+def _parse_response(resp) -> tuple[str | None, dict]:
+    """Return ``(content, usage)`` from a 200 response.
 
-    OpenRouter occasionally returns HTTP 200 with an inline ``{"error": ...}`` or
-    an empty ``choices`` list; guard every access so those become a retry, not an
-    unhandled ``KeyError``/``IndexError``."""
+    ``content`` is None if the body is malformed — OpenRouter occasionally
+    returns HTTP 200 with an inline ``{"error": ...}`` or an empty ``choices``
+    list; guard every access so those become a retry, not an unhandled
+    ``KeyError``/``IndexError``. ``usage`` is the (possibly empty) usage dict.
+    """
     try:
         data = resp.json()
     except ValueError:
-        return None
-    choices = data.get("choices") if isinstance(data, dict) else None
-    if not choices:
-        return None
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    return content if isinstance(content, str) else None
+        return None, {}
+    if not isinstance(data, dict):
+        return None, {}
+    content = None
+    choices = data.get("choices")
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            content = message["content"]
+    usage = data.get("usage")
+    return content, (usage if isinstance(usage, dict) else {})
 
 
-def _openrouter(prompt: str, model: str, max_retries: int) -> str:
+def _extract_content(resp) -> str | None:
+    """Completion text from a 200 response, or None if malformed (see _parse_response)."""
+    return _parse_response(resp)[0]
+
+
+def _usage_fields(usage: dict) -> tuple[int, int, float]:
+    return (
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+        float(usage.get("cost") or 0.0),   # OpenRouter reports cost in USD
+    )
+
+
+def _openrouter(messages: list[Message], model: str, max_retries: int) -> LLMResult:
     if not _OPENROUTER_KEYS:
         raise LLMError("No OPENROUTER_API_KEYS configured in .env")
     last: Exception | None = None
@@ -111,7 +158,7 @@ def _openrouter(prompt: str, model: str, max_retries: int) -> str:
                 },
                 json={
                     "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0,
                     # Cap the completion budget. The agent only emits a small JSON
                     # object per turn, so ~512 tokens is ample — and it stops
@@ -120,18 +167,26 @@ def _openrouter(prompt: str, model: str, max_retries: int) -> str:
                     # "requires more credits, or fewer max_tokens" once free credit
                     # ran low.
                     "max_tokens": _OPENROUTER_MAX_TOKENS,
+                    # Ask OpenRouter to include the USD cost in the usage block.
+                    "usage": {"include": True},
                 },
                 timeout=120,
             )
             if resp.status_code == 200:
-                content = _extract_content(resp)
+                content, usage = _parse_response(resp)
                 if content is not None:
-                    return content
-                # 200 OK but no usable completion (e.g. a body carrying an
-                # inline {"error": ...}, or empty choices). Treat as transient
-                # and retry rather than crashing on a KeyError.
+                    pt, ct, cost = _usage_fields(usage)
+                    return LLMResult(content, pt, ct, cost)
+                # 200 OK but no usable completion; treat as transient and retry.
                 last = RuntimeError(f"OpenRouter 200 without content: {resp.text[:160]}")
                 time.sleep(min(20.0, 2 + attempt * 3))
+                continue
+            if resp.status_code == 402:
+                # This key is out of credit ("requires more credits"). Rotate to
+                # the NEXT key immediately (no backoff — more money won't appear by
+                # waiting); with several funded keys the run routes around the dry
+                # one. If every key is exhausted we fail fast after the retries.
+                last = RuntimeError(f"HTTP 402: {resp.text[:160]}")
                 continue
             if resp.status_code in (429, 500, 502, 503):
                 last = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160]}")
@@ -182,12 +237,17 @@ def _retry_delay(err: Exception) -> float:
     return float(m.group(1)) + 1.0 if m else 20.0
 
 
-def _gemini(prompt: str, model: str, max_retries: int) -> str:
+def _gemini(messages: list[Message], model: str, max_retries: int) -> LLMResult:
+    prompt = _messages_to_prompt(messages)
     last: Exception | None = None
     for attempt in range(max_retries):
         _throttle()
         try:
-            return _gemini_client().models.generate_content(model=model, contents=prompt).text
+            resp = _gemini_client().models.generate_content(model=model, contents=prompt)
+            um = getattr(resp, "usage_metadata", None)
+            pt = int(getattr(um, "prompt_token_count", 0) or 0)
+            ct = int(getattr(um, "candidates_token_count", 0) or 0)
+            return LLMResult(resp.text, pt, ct, 0.0)   # free tier: no cost
         except Exception as e:  # noqa: BLE001
             last = e
             rate_limited = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
@@ -196,9 +256,20 @@ def _gemini(prompt: str, model: str, max_retries: int) -> str:
 
 
 # --------------------------------------------------------------------------
-# Public entry point
+# Public entry points
 # --------------------------------------------------------------------------
-def ask_llm(prompt: str, *, max_retries: int = 6) -> str:
+# Default a bit above the number of rotated keys so a single call can try each
+# funded key once (402/rate-limit retries rotate the key each attempt).
+_DEFAULT_MAX_RETRIES = max(6, len(_OPENROUTER_KEYS) + 1)
+
+
+def chat(messages: list[Message], *, max_retries: int = _DEFAULT_MAX_RETRIES) -> LLMResult:
+    """Run one chat completion over role-tagged messages, with usage accounting."""
     if _state["provider"] == "openrouter":
-        return _openrouter(prompt, _state["model"], max_retries)
-    return _gemini(prompt, _state["model"], max_retries)
+        return _openrouter(messages, _state["model"], max_retries)
+    return _gemini(messages, _state["model"], max_retries)
+
+
+def ask_llm(prompt: str, *, max_retries: int = _DEFAULT_MAX_RETRIES) -> str:
+    """Single-turn convenience wrapper returning just the completion text."""
+    return chat([{"role": "user", "content": prompt}], max_retries=max_retries).text

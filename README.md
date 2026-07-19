@@ -12,22 +12,23 @@ No Windows lab required: the AD graph is generated **synthetically** in the Bloo
 
 ## Results
 
-A pilot sweep with `openai/gpt-4o-mini` (temperature 0), 104 valid runs across three graph sizes:
+A sweep with `openai/gpt-4o-mini` (temperature 0), 27 runs across three graph sizes (6 planted + 3 random starts each):
 
-| Nodes | Correctness | Hallucination | Avg tool calls | Avg time |
-| ---: | ---: | ---: | ---: | ---: |
-| 210 | 75.0% | 5.6% | 5.7 | 17.8s |
-| 409 | 58.3% | 2.8% | 6.1 | 19.8s |
-| 674 | 37.5% | 0.0% | 8.0 | 24.4s |
+| Nodes | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 213 | 66.7% | 33.3% | 1 | 5.1 | 20.1s |
+| 478 | 66.7% | 33.3% | 1 | 4.7 | 20.1s |
+| 810 | 77.8% | 11.1% | 1 | 5.9 | 33.6s |
 
 ![Scaling behaviour](results/scaling.png)
 
-Two findings stand out:
+Overall: **70.4% correct**, every real path it finds is the **shortest one** (19/19 optimal), and it misses only **6 of 25** truly-reachable cases — at about **$0.001/run**. Three findings stand out:
 
-- **Correctness falls sharply as the graph grows** (75% → 37.5%), while exploration cost rises. Against BloodHound — which finds a path whenever one exists — the agent solved only ~47% of the genuinely reachable cases (missed 44 of 83).
-- **But the agent is honest when it answers:** the hallucination rate is low and *decreases* with size (down to 0%). On larger graphs it fails by giving up or missing the path, not by fabricating edges.
+- **It finds paths BloodHound's rule-based query can't.** On the cases reachable only through advanced tradecraft (e.g. Kerberoasting), the agent found a real path **3 of 5** times — one at every graph size. That's the whole point: an LLM chaining primitives a canonical shortest-path query doesn't encode.
+- **Correctness holds up with size** (~67–78%), rather than collapsing — with a 20-step budget and forced name→id resolution, the agent no longer starves on larger graphs. It essentially never "gives up": the failure-mode breakdown shows ~0 step-exhaustion, not the earlier pattern.
+- **When it's wrong, it now fabricates rather than folds.** Hallucination is the dominant failure mode (~26% overall) — the honesty/accuracy trade-off moved. Reducing that is the clearest next lever (e.g. forcing a `check_path_exists` confirmation before finishing).
 
-Reproduce with `python experiments/run_benchmark.py` (see [Quickstart](#quickstart)). Full numbers in [`results/metrics.md`](results/metrics.md).
+Reproduce with `python experiments/run_benchmark.py` (see [Quickstart](#quickstart)). Full numbers, per-size table, and failure-mode breakdown in [`results/metrics.md`](results/metrics.md). *(Small sample — 27 runs, single model, temperature 0; treat as a pilot.)*
 
 ---
 
@@ -50,7 +51,9 @@ The agent is **never shown the whole graph as text** — that would reduce the t
 | `query_inbound_edges(node)` | What can control / reach this object |
 | `check_path_exists(start, end)` | Whether a chain actually exists in the graph |
 
-It runs a minimal **ReAct loop** (reason → call a tool → observe → repeat) and finishes by proposing an ordered attack path. Scoring then verifies that path **edge by edge** against Neo4j: every claimed hop must be a real relationship reaching Domain Admins, or it's counted as a hallucination. The same graph's Cypher `shortestPath` is the BloodHound-equivalent answer key.
+It runs a minimal **ReAct loop** (reason → call a tool → observe → repeat) and finishes by proposing an ordered attack path. Scoring then verifies that path **edge by edge** against Neo4j: every claimed hop must be a real relationship reaching Domain Admins, or it's counted as a hallucination.
+
+**Canonical vs. advanced — where the agent can beat BloodHound.** The graph carries two tiers of attack edge. *Canonical* edges (`MemberOf`, `GenericAll`, `ForceChangePassword`, …) are what BloodHound's classic "shortest path to Domain Admins" query traverses — that canonical-only shortest path is the rule-based baseline. *Advanced* edges model tradecraft a canonical query doesn't encode but a reasoning agent can still chain — `Kerberoastable` (roast a service account and crack it offline) and `UnconstrainedDelegationAbuse`. The agent and the *true*-reachability ground truth traverse **both** tiers; the BloodHound baseline traverses only canonical. So some starts have a real escalation path that the rule-based query misses, and a run that finds one is scored as **`beats_bloodhound`** — the case where the LLM does something the baseline cannot.
 
 ---
 
@@ -73,12 +76,7 @@ python data/generator/verify.py            # counts + ground-truth attack paths
 # 4. Run the agent once from a planted foothold.
 python run.py
 
-# 5. Run the full benchmark (sweeps graph sizes, scores every run, writes results/).
-python experiments/run_benchmark.py --sizes 150 350 600 --random 5
-```
 
-Offline unit tests (no Neo4j or API key needed) live in [`tests/unit/`](tests/unit/);
-run them with `pip install -e ".[dev]"` then `pytest`.
 
 Configuration lives entirely in `.env` — see [`.env.example`](.env.example) for every option (Neo4j connection, LLM backend/model, rate limits).
 

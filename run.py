@@ -38,17 +38,22 @@ def main():
                 **score,
                 "tool_calls": result.tool_calls,
                 "steps": result.steps,
+                "max_steps": result.max_steps,
                 "time_seconds": result.elapsed_seconds,
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "cost_usd": result.cost_usd,
                 "error": "",
             }
         )
     finally:
         ctx.close()
 
+    beats = " (beats BloodHound!)" if score.get("beats_bloodhound") else ""
     print(
         f"\nRun completed: correct={score['correct']}, "
         f"valid_path={score['path_valid']}, hallucinated={score['hallucinated_edge']}, "
-        f"{result.tool_calls} tool calls, {result.elapsed_seconds:.1f}s."
+        f"{result.tool_calls} tool calls, {result.elapsed_seconds:.1f}s.{beats}"
     )
 
 

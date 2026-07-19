@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from ariadne.config import load_neo4j_config
 from ariadne.db import get_driver, run_read
-from ariadne.schema import GOAL_GROUP, TRAVERSABLE_EDGES
+from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, TRAVERSABLE_EDGES
 from ariadne.tools import check_path_exists
 
 _ARROW = re.compile(r"->|=>|→")
@@ -61,7 +61,8 @@ class ScoringContext:
     goal_oid: str | None
     name_to_oid: dict = field(default_factory=dict)
     oids: set = field(default_factory=set)
-    rel_filter: str = ""
+    rel_filter: str = ""            # ALL traversable edges (agent / true reach)
+    canonical_filter: str = ""      # canonical edges only (BloodHound baseline)
 
     @classmethod
     def load(cls) -> "ScoringContext":
@@ -98,7 +99,8 @@ class ScoringContext:
             )
         }
         rel_filter = "|".join(e for e in TRAVERSABLE_EDGES if e in present)
-        return cls(driver, database, goal_oid, name_to_oid, oids, rel_filter)
+        canonical_filter = "|".join(e for e in CANONICAL_EDGES if e in present)
+        return cls(driver, database, goal_oid, name_to_oid, oids, rel_filter, canonical_filter)
 
     def close(self) -> None:
         # The driver is the process-wide shared instance (ariadne.db), so we do
@@ -126,13 +128,13 @@ class ScoringContext:
         )
         return rows[0]["e"] if rows else None
 
-    def baseline(self, start_oid: str) -> dict:
-        """Ground-truth shortest path start -> Domain Admins (BloodHound baseline)."""
-        if not self.goal_oid or not self.rel_filter:
+    def _shortest(self, start_oid: str, rel_filter: str) -> dict:
+        """Shortest path start -> Domain Admins over the given edge-type filter."""
+        if not self.goal_oid or not rel_filter:
             return {"reachable": False, "hops": -1}
         q = (
             f"MATCH (s {{objectid:$s}}), (g {{objectid:$g}}) "
-            f"OPTIONAL MATCH p = shortestPath((s)-[:{self.rel_filter}*1..15]->(g)) "
+            f"OPTIONAL MATCH p = shortestPath((s)-[:{rel_filter}*1..15]->(g)) "
             f"RETURN p IS NOT NULL AS reachable, "
             f"CASE WHEN p IS NULL THEN -1 ELSE length(p) END AS hops"
         )
@@ -140,6 +142,16 @@ class ScoringContext:
         if not rows:
             return {"reachable": False, "hops": -1}
         return {"reachable": bool(rows[0]["reachable"]), "hops": rows[0]["hops"]}
+
+    def baseline(self, start_oid: str) -> dict:
+        """TRUE ground truth: shortest path over ALL attack edges (canonical +
+        advanced). This is what the agent is *actually* scored against."""
+        return self._shortest(start_oid, self.rel_filter)
+
+    def bloodhound(self, start_oid: str) -> dict:
+        """BloodHound-equivalent: shortest path over CANONICAL edges only — what a
+        rule-based shortest-path query would find, ignoring advanced tradecraft."""
+        return self._shortest(start_oid, self.canonical_filter)
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +193,8 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
     answer = getattr(result, "answer", str(result)) or ""
     path_field = getattr(result, "path_field", None)
     finished = getattr(result, "finished", True)
-    base = ctx.baseline(start_oid)
+    base = ctx.baseline(start_oid)      # TRUE reachability (all attack edges)
+    bh = ctx.bloodhound(start_oid)      # BloodHound-canonical reachability
 
     if not finished:
         # The agent never produced a final answer (ran out of steps or emitted
@@ -197,6 +210,9 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
             "agent_hops": -1,
             "baseline_reachable": base["reachable"],
             "baseline_hops": base["hops"],
+            "bloodhound_reachable": bh["reachable"],
+            "bloodhound_hops": bh["hops"],
+            "beats_bloodhound": False,
             "matches_baseline": False,
             "optimal": False,
         }
@@ -208,7 +224,7 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         path_valid = False
         hallucinated = False
         agent_hops = -1
-        # "correct" = agent was right to give up (baseline also has no path)
+        # "correct" = agent was right to give up (no TRUE path exists either)
         correct = not base["reachable"]
     else:
         v = verify_path(ctx, tokens, expected_start_oid=start_oid)
@@ -216,6 +232,11 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         hallucinated = v["hallucinated"]
         agent_hops = v["hops"]
         correct = v["valid"] and base["reachable"]
+
+    # The headline "vs BloodHound" result: the agent found a REAL path where the
+    # rule-based canonical shortest-path query finds none (i.e. the route needs
+    # advanced tradecraft). Only counts when the agent's path is genuinely valid.
+    beats_bloodhound = bool(path_valid and not bh["reachable"])
 
     return {
         "proposed_path": answer,
@@ -227,6 +248,9 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
         "agent_hops": agent_hops,
         "baseline_reachable": base["reachable"],
         "baseline_hops": base["hops"],
+        "bloodhound_reachable": bh["reachable"],
+        "bloodhound_hops": bh["hops"],
+        "beats_bloodhound": beats_bloodhound,
         "matches_baseline": path_valid == base["reachable"],
         "optimal": bool(path_valid and base["reachable"] and agent_hops == base["hops"]),
     }

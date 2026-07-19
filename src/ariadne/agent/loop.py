@@ -3,8 +3,12 @@
 ``run_agent`` drives the reason -> act -> observe cycle and returns an
 ``AgentResult`` carrying everything the evaluation layer needs: the final
 answer, the structured path the agent proposed (if any), and *real* counters
-(tool calls, reasoning steps, wall-clock time). Those counters used to be
-hardcoded in ``run.py``; now they come from the run itself.
+(tool calls, reasoning steps, token/cost usage, wall-clock time).
+
+The conversation is kept as proper role-tagged messages (``system`` / ``user`` /
+``assistant``) and handed to ``llm.chat`` — the model sees the system prompt, its
+own prior actions, and the tool observations as distinct turns, rather than one
+flattened blob.
 """
 
 from __future__ import annotations
@@ -13,11 +17,11 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from .llm import ask_llm
+from .llm import chat
 from .prompts import SYSTEM_PROMPT
 from .tool_registry import TOOLS
 
-MAX_STEPS = 12
+MAX_STEPS = 20   # default reasoning-step budget (was 12; large graphs need room)
 
 
 @dataclass
@@ -28,22 +32,40 @@ class AgentResult:
     tool_calls: int                # graph queries the agent actually ran
     steps: int                     # reasoning steps taken
     elapsed_seconds: float         # wall-clock time for the whole run
+    max_steps: int = MAX_STEPS     # the step budget this run was given
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
     transcript: list[dict] = field(default_factory=list)
 
     def __str__(self) -> str:  # keeps run.py / test_agent.py prints readable
         return self.answer
 
 
-def _user_preamble(start_node: str) -> str:
+def _user_preamble(start_node: str, max_steps: int) -> str:
     return f"""
 Starting node: {start_node}
+Goal: reach the DOMAIN ADMINS group.
+
+IMPORTANT: the edge tools take OBJECT IDS (like S-1-5-21-…-1234), not names. So
+FIRST call search_node to resolve a name to its object id, then follow edges from
+that id. Your very first action should resolve the starting node.
+
+You have at most {max_steps} steps. Explore efficiently: from the start's object
+id, follow query_outbound_edges hop by hop toward DOMAIN ADMINS. If forward
+progress stalls, resolve DOMAIN ADMINS with search_node and work BACKWARD with
+query_inbound_edges from its id to meet in the middle. You may confirm a full
+chain with check_path_exists.
 
 Available tools: search_node, query_outbound_edges, query_inbound_edges, check_path_exists
 
 Respond with ONE JSON object per turn.
 
-To act:
-{{ "action": "query_outbound_edges", "input": "S-1-5-21-...-900001" }}
+Step 1 — resolve the start node to an object id:
+{{ "action": "search_node", "input": "{start_node}" }}
+
+Then act on a REAL object id returned by the tools:
+{{ "action": "query_outbound_edges", "input": "<objectid from search_node>" }}
 
 When done, report the ordered NODE NAMES you walked (start -> ... -> DOMAIN ADMINS):
 {{ "action": "finish", "answer": "A -> B -> DOMAIN ADMINS", "path": ["A", "B", "DOMAIN ADMINS"] }}
@@ -53,22 +75,26 @@ If no path to DOMAIN ADMINS exists:
 """
 
 
-def run_agent(start_node: str, *, verbose: bool = True) -> AgentResult:
+def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = True) -> AgentResult:
     """Run the ReAct loop from ``start_node`` and return structured telemetry."""
     history = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _user_preamble(start_node)},
+        {"role": "user", "content": _user_preamble(start_node, max_steps)},
     ]
 
     tool_calls = 0
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
     started = time.perf_counter()
 
-    for step in range(MAX_STEPS):
+    for step in range(max_steps):
         if verbose:
             print(f"\n========== STEP {step + 1} ==========")
 
-        prompt = "\n".join(m["content"] for m in history)
-        response = ask_llm(prompt)
+        result = chat(history)
+        response = result.text
+        usage["prompt_tokens"] += result.prompt_tokens
+        usage["completion_tokens"] += result.completion_tokens
+        usage["cost_usd"] += result.cost_usd
         if verbose:
             print("LLM:")
             print(response)
@@ -78,7 +104,7 @@ def run_agent(start_node: str, *, verbose: bool = True) -> AgentResult:
         action = _parse_json(response)
         if action is None:
             # Model didn't return usable JSON; treat the raw text as the answer.
-            return _result(response.strip(), False, None, tool_calls, step + 1, started, history)
+            return _result(response.strip(), False, None, tool_calls, step + 1, started, max_steps, usage, history)
 
         if action.get("action") == "finish":
             return _result(
@@ -88,6 +114,8 @@ def run_agent(start_node: str, *, verbose: bool = True) -> AgentResult:
                 tool_calls,
                 step + 1,
                 started,
+                max_steps,
+                usage,
                 history,
             )
 
@@ -109,13 +137,13 @@ def run_agent(start_node: str, *, verbose: bool = True) -> AgentResult:
 
         history.append({"role": "user", "content": f"Observation:\n{observation}"})
 
-    return _result("Maximum reasoning steps exceeded.", False, None, tool_calls, MAX_STEPS, started, history)
+    return _result("Maximum reasoning steps exceeded.", False, None, tool_calls, max_steps, started, max_steps, usage, history)
 
 
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
-def _result(answer, finished, path_field, tool_calls, steps, started, history) -> AgentResult:
+def _result(answer, finished, path_field, tool_calls, steps, started, max_steps, usage, history) -> AgentResult:
     return AgentResult(
         answer=answer,
         finished=finished,
@@ -123,6 +151,10 @@ def _result(answer, finished, path_field, tool_calls, steps, started, history) -
         tool_calls=tool_calls,
         steps=steps,
         elapsed_seconds=time.perf_counter() - started,
+        max_steps=max_steps,
+        prompt_tokens=usage["prompt_tokens"],
+        completion_tokens=usage["completion_tokens"],
+        cost_usd=usage["cost_usd"],
         transcript=history,
     )
 

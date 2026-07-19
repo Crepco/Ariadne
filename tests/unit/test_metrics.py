@@ -63,3 +63,55 @@ def test_by_size_groups_and_sorts(tmp_path):
     by = metrics._by_size(df)
     assert list(by["graph_size"]) == [210, 409]
     assert by[by["graph_size"] == 210]["runs"].iloc[0] == 2
+
+
+def test_old_csv_missing_new_columns_still_aggregates(tmp_path):
+    # An old-format log (no bloodhound/token columns) must load and aggregate
+    # without KeyError — missing columns are filled with defaults. beats_bloodhound
+    # is a stored column (defaults False -> 0); a full markdown render must work too.
+    p = _write_csv(tmp_path, "210,True,True,False,True,False,True,4,10.0,\n")
+    df = metrics.valid_runs(metrics.load_results(p))
+    o = metrics._overall(df)
+    assert o["beats_bloodhound"] == 0
+    assert "advanced_required" in o           # computed field present, no KeyError
+    assert isinstance(metrics.metrics_markdown(p), str)
+
+
+_BH_HEADER = (
+    "graph_size,correct,path_valid,hallucinated_edge,incomplete,declared_no_path,"
+    "baseline_reachable,bloodhound_reachable,beats_bloodhound,optimal,tool_calls,time_seconds,error\n"
+)
+
+
+def test_overall_counts_beats_bloodhound_and_advanced_required(tmp_path):
+    body = (
+        # advanced-only solve: truly reachable, canonical-blind, agent found it
+        "210,True,True,False,False,False,True,False,True,True,5,10.0,\n"
+        # ordinary solve: canonical also reaches, no beat
+        "210,True,True,False,False,False,True,True,False,True,4,9.0,\n"
+    )
+    p = tmp_path / "r.csv"
+    p.write_text(_BH_HEADER + body, encoding="utf-8")
+    df = metrics.valid_runs(metrics.load_results(p))
+    o = metrics._overall(df)
+    assert o["beats_bloodhound"] == 1
+    assert o["advanced_required"] == 1  # baseline_reachable & not bloodhound_reachable
+
+
+def test_classify_assigns_one_bucket_per_run(tmp_path):
+    body = (
+        "210,True,True,False,False,False,True,True,False,True,4,9,\n"     # correct
+        "210,False,False,True,False,False,True,True,False,False,6,12,\n"  # hallucinated
+        "210,False,False,False,False,True,True,True,False,False,7,15,\n"  # false_no_path
+        "210,False,False,False,True,False,True,True,False,False,12,30,\n" # incomplete
+        "210,False,False,False,False,False,True,True,False,False,5,11,\n" # wrong_path
+    )
+    p = tmp_path / "r.csv"
+    p.write_text(_BH_HEADER + body, encoding="utf-8")
+    df = metrics.valid_runs(metrics.load_results(p))
+    assert metrics.classify(df).tolist() == [
+        "correct", "hallucinated", "false_no_path", "incomplete", "wrong_path",
+    ]
+    fm = metrics._failure_modes(df)
+    assert int(fm.loc[210, "correct"]) == 1
+    assert int(fm.loc[210, "wrong_path"]) == 1

@@ -35,6 +35,7 @@ from typing import Any
 
 from ariadne.config import DEFAULT_DOMAIN
 from ariadne.schema import (
+    CANONICAL_EDGES,
     CONTROL_EDGES_ANY,
     CONTROL_EDGES_GROUP,
     CONTROL_EDGES_USER,
@@ -134,9 +135,11 @@ def build_graph(
 
     # --- Users ---
     user_oids: list[str] = []
+    spn_users: list[str] = []          # kerberoastable service accounts
     for i in range(n_users):
         oid = sid(rid)
         rid += 1
+        hasspn = rng.random() < 0.08
         nodes.append(
             _node(
                 "User",
@@ -145,20 +148,24 @@ def build_graph(
                     "name": f"USER{i:04d}@{domain}",
                     "domain": domain,
                     "enabled": True,
-                    "hasspn": rng.random() < 0.08,       # kerberoastable service accounts
+                    "hasspn": hasspn,
                     "admincount": False,
                     "owned": False,
                 },
             )
         )
         user_oids.append(oid)
+        if hasspn:
+            spn_users.append(oid)
 
     # --- Computers ---
     comp_oids: list[str] = []
+    unconstrained_comps: list[str] = []   # abusable unconstrained-delegation hosts
     n_dcs = max(1, n_computers // 40)
     for i in range(n_computers):
         oid = sid(rid)
         rid += 1
+        unconstrained = rng.random() < 0.05
         nodes.append(
             _node(
                 "Computer",
@@ -168,11 +175,13 @@ def build_graph(
                     "domain": domain,
                     "enabled": True,
                     "is_dc": i < n_dcs,
-                    "unconstraineddelegation": rng.random() < 0.05,
+                    "unconstraineddelegation": unconstrained,
                 },
             )
         )
         comp_oids.append(oid)
+        if unconstrained:
+            unconstrained_comps.append(oid)
 
     all_groups = group_oids + list(special.values())
     principals = user_oids + all_groups
@@ -235,6 +244,21 @@ def build_graph(
     for p in rng.sample(principals, max(1, len(principals) // 250)):
         edges.add(_edge("DCSync", p, domain_oid))
 
+    # --- Advanced tradecraft edges (NOT part of BloodHound's canonical query) --
+    # These are real, exploitable primitives a reasoning agent can chain but a
+    # rule-based shortest-path baseline ignores. See schema.ADVANCED_EDGES.
+    #
+    # Kerberoastable: whoever holds `src` can request `svc`'s service ticket and
+    # crack it offline, taking over the service account.
+    for svc in spn_users:
+        src = rng.choice(principals)
+        if src != svc:
+            edges.add(_edge("Kerberoastable", src, svc))
+    # Unconstrained-delegation abuse: coerce a privileged account to authenticate
+    # to the host, capture its TGT, and escalate straight to domain dominance.
+    for comp in unconstrained_comps:
+        edges.add(_edge("UnconstrainedDelegationAbuse", comp, goal))
+
     graph: dict[str, Any] = {
         "nodes": nodes,
         "edges": edges,
@@ -265,7 +289,7 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
     nodes: list[dict] = graph["nodes"]
     edges: set = graph["edges"]
 
-    def add_user(tag: str, rid: int) -> str:
+    def add_user(tag: str, rid: int, hasspn: bool = False) -> str:
         oid = sid(rid)
         nodes.append(
             _node(
@@ -275,7 +299,7 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
                     "name": f"PLANT_{tag}@{domain}",
                     "domain": domain,
                     "enabled": True,
-                    "hasspn": False,
+                    "hasspn": hasspn,
                     "admincount": False,
                     "owned": False,
                     "planted": True,
@@ -315,6 +339,7 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
             "nodes": [a, b, g, goal],
             "edges": ["ForceChangePassword", "MemberOf", "GenericAll"],
             "hops": 3,
+            "advanced": False,
         }
     )
 
@@ -332,6 +357,29 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
             "nodes": [c, d, g2, goal],
             "edges": ["GenericWrite", "AddMember", "MemberOf"],
             "hops": 3,
+            "advanced": False,
+        }
+    )
+
+    # Chain C (advanced): Kerberoastable -> MemberOf -> GenericAll(DA).
+    # The pivotal first hop is advanced tradecraft, so BloodHound's canonical
+    # shortest-path query finds NO route from C_START (its only outbound edge is
+    # advanced), while an agent that knows kerberoasting reaches DA in 3 hops.
+    # This is a planted, known-answer "agent beats BloodHound" case.
+    e = add_user("C_START", PLANT_RID_BASE + 21)
+    f = add_user("C_SVC", PLANT_RID_BASE + 22, hasspn=True)
+    g3 = add_group("C_MIDGROUP", PLANT_RID_BASE + 23)
+    edges.add(_edge("Kerberoastable", e, f))
+    edges.add(_edge("MemberOf", f, g3))
+    edges.add(_edge("GenericAll", g3, goal))
+    graph["planted"].append(
+        {
+            "name": "kerberoast_nested_genericall",
+            "start": e,
+            "nodes": [e, f, g3, goal],
+            "edges": ["Kerberoastable", "MemberOf", "GenericAll"],
+            "hops": 3,
+            "advanced": True,
         }
     )
 
@@ -339,11 +387,11 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
 # ---------------------------------------------------------------------------
 # Offline solvability check (pure Python BFS, no database)
 # ---------------------------------------------------------------------------
-def _adjacency(graph: dict[str, Any]) -> dict[str, list[str]]:
+def _adjacency(graph: dict[str, Any], edge_types=None) -> dict[str, list[str]]:
+    allowed = set(TRAVERSABLE_EDGES if edge_types is None else edge_types)
     adj: dict[str, list[str]] = defaultdict(list)
-    traversable = set(TRAVERSABLE_EDGES)
     for etype, src, dst in graph["edges"]:
-        if etype in traversable:
+        if etype in allowed:
             adj[src].append(dst)
     return adj
 
@@ -365,19 +413,41 @@ def _reachable(adj: dict[str, list[str]], start: str, goal: str) -> bool:
 
 
 def solvability_report(graph: dict[str, Any], sample: int = 100) -> dict[str, Any]:
-    """Estimate what fraction of users can reach Domain Admins."""
-    adj = _adjacency(graph)
+    """Estimate what fraction of users can reach Domain Admins.
+
+    Reports true reachability (all attack edges) and BloodHound-canonical
+    reachability (canonical edges only) so the "advanced-only" gap — users the
+    rule-based baseline can't reach but a reasoning agent can — is visible up
+    front.
+    """
+    adj = _adjacency(graph)                                  # all edges = truth
+    canon = _adjacency(graph, CANONICAL_EDGES)               # BloodHound baseline
     users = graph["user_oids"]
     rng = random.Random(graph["seed"])
     picks = users if len(users) <= sample else rng.sample(users, sample)
     solvable = sum(_reachable(adj, u, graph["goal"]) for u in picks)
-    # Planted starts must always be solvable — sanity check the planting logic.
+    canon_solvable = sum(_reachable(canon, u, graph["goal"]) for u in picks)
+    advanced_only = sum(
+        _reachable(adj, u, graph["goal"]) and not _reachable(canon, u, graph["goal"])
+        for u in picks
+    )
+    # Planted starts must always be truly solvable — sanity check the planting.
     planted_ok = all(_reachable(adj, p["start"], graph["goal"]) for p in graph["planted"])
+    # Advanced planted chains must be BloodHound-blind (canonical-unreachable),
+    # otherwise the "beats BloodHound" case isn't actually testable.
+    adv_blind = all(
+        not _reachable(canon, p["start"], graph["goal"])
+        for p in graph["planted"]
+        if p.get("advanced")
+    )
     return {
         "sampled_users": len(picks),
         "solvable_users": solvable,
         "solvable_fraction": round(solvable / len(picks), 3) if picks else 0.0,
+        "canonical_solvable_users": canon_solvable,
+        "advanced_only_users": advanced_only,
         "planted_chains_reachable": planted_ok,
+        "advanced_chains_bloodhound_blind": adv_blind,
     }
 
 
@@ -476,8 +546,13 @@ def main() -> None:
     report = solvability_report(graph)
     print(
         f"  solvability: {report['solvable_users']}/{report['sampled_users']} sampled users "
-        f"reach Domain Admins ({report['solvable_fraction']:.0%});"
-        f" planted reachable={report['planted_chains_reachable']}"
+        f"reach Domain Admins ({report['solvable_fraction']:.0%}); "
+        f"BloodHound-canonical reaches {report['canonical_solvable_users']}, "
+        f"{report['advanced_only_users']} advanced-only"
+    )
+    print(
+        f"  planted reachable={report['planted_chains_reachable']}, "
+        f"advanced chains BloodHound-blind={report['advanced_chains_bloodhound_blind']}"
     )
 
     # Save the planted-chain answer key next to the graph artifacts.

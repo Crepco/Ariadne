@@ -27,13 +27,20 @@ FIELDS = [
     "declared_no_path",
     "incomplete",
     "agent_hops",
-    "baseline_reachable",
+    "baseline_reachable",     # TRUE reachability over all attack edges
     "baseline_hops",
+    "bloodhound_reachable",   # canonical-only reachability (rule-based baseline)
+    "bloodhound_hops",
+    "beats_bloodhound",       # agent found a real path BloodHound's query misses
     "matches_baseline",
     "optimal",
     "tool_calls",
     "steps",
+    "max_steps",
     "time_seconds",
+    "prompt_tokens",
+    "completion_tokens",
+    "cost_usd",
     "error",
 ]
 
