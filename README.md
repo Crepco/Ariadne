@@ -16,9 +16,9 @@ A sweep with `openai/gpt-4o-mini` (temperature 0), 30 runs across three graph si
 
 | Nodes | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 216 | 60.0% | 20.0% | 1 | 5.3 | 18.3s |
-| 481 | 70.0% | 20.0% | 1 | 4.8 | 17.2s |
-| 813 | 60.0% | 20.0% | 1 | 6.1 | 20.4s |
+| 216 | 60.0% | 10.0% | 1 | 5.3 | 18.6s |
+| 481 | 70.0% | 30.0% | 1 | 5.2 | 19.7s |
+| 813 | 60.0% | 20.0% | 1 | 7.1 | 24.1s |
 
 ![Scaling behaviour](results/scaling.png)
 
@@ -65,6 +65,8 @@ The same engine drives a practical layer that works on **real** BloodHound data 
 
 This is the honest framing of "AI + BloodHound": BloodHound (or the synthetic generator) supplies the graph and the deterministic queries; the LLM adds reasoning and a natural-language surface, with a verifier between it and every claim.
 
+And you can **watch it happen**: `ariadne-web` opens a local visualiser where the agent traces its thread through the graph hop by hop — gold for canonical edges, **cyan for inferred steps BloodHound can't see**, crimson at Domain Admins — and closes with the verdict (including "Beats BloodHound").
+
 ---
 
 ## Quickstart
@@ -72,9 +74,9 @@ This is the honest framing of "AI + BloodHound": BloodHound (or the synthetic ge
 **Prerequisites:** Python 3.11+, a Neo4j database (a free [Neo4j Aura](https://console.neo4j.io) instance, or local Neo4j — see [`infra/neo4j/`](infra/neo4j/)), and an LLM API key ([OpenRouter](https://openrouter.ai) by default).
 
 ```bash
-# 1. Install (editable). Add extras as needed: .[viz] for plots, .[gemini] for the Gemini backend.
+# 1. Install (editable). Extras: .[viz] plots, .[web] visualiser, .[gemini] Gemini backend.
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -e ".[viz]"
+pip install -e ".[viz,web]"
 
 # 2. Configure credentials.
 cp .env.example .env        # Windows: copy .env.example .env — then fill in NEO4J_* and OPENROUTER_API_KEYS
@@ -88,10 +90,13 @@ python data/ingest/bloodhound.py --from path/to/export --wipe
 # 4. Run the agent once from a planted foothold.
 python run.py
 
-# 5. Talk to the graph: a grounded security chat assistant (every answer verified).
+# 5. Watch the agent trace its thread through the graph (visualiser at localhost:5000).
+ariadne-web
+
+# 6. Or talk to the graph: a grounded security chat assistant (every answer verified).
 ariadne-chat      # e.g. "find kerberoastable paths to domain admin", "explain the first one"
 
-# 6. Run the full benchmark (sweeps graph sizes, scores every run, writes results/).
+# 7. Run the full benchmark (sweeps graph sizes, scores every run, writes results/).
 python experiments/run_benchmark.py
 ```
 
@@ -112,6 +117,7 @@ Configuration lives entirely in `.env` — see [`.env.example`](.env.example) fo
 | `src/ariadne/inference.py` | Property-based inference rules (kerberoast, unconstrained delegation) |
 | `src/ariadne/checks.py` | Deterministic vulnerability-check catalog |
 | `src/ariadne/chat.py`, `report.py` | Grounded chat assistant + path explanation / triage |
+| [`src/ariadne/web/`](src/ariadne/web/) | Local visualiser (`ariadne-web`) — watch the agent trace its thread |
 | [`src/ariadne/`](src/ariadne/) | Shared `config`, `db`, and `schema` modules |
 | [`experiments/`](experiments/) | The benchmark runner and raw run logs |
 | [`results/`](results/) | Generated metrics table + scaling plots |

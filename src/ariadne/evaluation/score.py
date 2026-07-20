@@ -94,7 +94,9 @@ class ScoringContext:
             if name:
                 names[oid] = name
                 name_to_oid[name.upper()] = oid
-                name_to_oid[name.split("@")[0].upper()] = oid  # short name too
+                # short name too: users are USER@DOMAIN, computers are HOST.DOMAIN,
+                # so split on either separator.
+                name_to_oid[re.split(r"[@.]", name)[0].upper()] = oid
 
         goal_rows = run_read(
             driver,

@@ -76,8 +76,15 @@ If no path to DOMAIN ADMINS exists:
 """
 
 
-def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = True) -> AgentResult:
-    """Run the ReAct loop from ``start_node`` and return structured telemetry."""
+def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = True,
+              on_step=None) -> AgentResult:
+    """Run the ReAct loop from ``start_node`` and return structured telemetry.
+
+    ``on_step``, if given, is called after each turn with a dict
+    ``{step, action, input, observation, reasoning}`` — used by the web UI to
+    replay the traversal (the observation is the raw tool result, before
+    stringification).
+    """
     history = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": _user_preamble(start_node, max_steps)},
@@ -108,6 +115,9 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
             return _result(response.strip(), False, None, tool_calls, step + 1, started, max_steps, usage, history)
 
         if action.get("action") == "finish":
+            if on_step:
+                on_step({"step": step + 1, "action": "finish", "input": None,
+                         "observation": None, "reasoning": response})
             return _result(
                 str(action.get("answer", "")).strip(),
                 True,
@@ -135,6 +145,10 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
                 observation = f"Tool error: {e}"
         if verbose:
             print(observation)
+
+        if on_step:
+            on_step({"step": step + 1, "action": tool, "input": argument,
+                     "observation": observation, "reasoning": response})
 
         history.append({"role": "user", "content": f"Observation:\n{observation}"})
 

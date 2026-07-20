@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ariadne — trace the thread to Domain Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wordmark">
+      <span class="mark">ARIADNE</span>
+      <span class="tagline">an AI agent traces its thread through Active Directory to Domain&nbsp;Admin</span>
+    </div>
+    <div class="status" id="status"><span class="dot" id="statusDot"></span><span id="statusText">connecting…</span></div>
+  </header>
+
+  <main class="stage">
+    <!-- Control rail -->
+    <aside class="rail">
+      <section class="panel">
+        <h2 class="eyebrow">Foothold</h2>
+        <label class="field">
+          <span>Start from</span>
+          <select id="startSelect"></select>
+        </label>
+        <button class="trace" id="traceBtn">Trace the thread</button>
+        <p class="hint" id="railHint">Pick a compromised account. The agent explores with graph tools and tries to reach Domain Admins.</p>
+      </section>
+
+      <section class="panel">
+        <h2 class="eyebrow">Vulnerability checks</h2>
+        <div id="checkList" class="checks"></div>
+        <p class="hint">Deterministic, evidence-backed. Findings light up on the graph.</p>
+      </section>
+
+      <section class="panel legend">
+        <h2 class="eyebrow">Legend</h2>
+        <ul>
+          <li><i class="swatch thread"></i> Ariadne's thread — canonical hop</li>
+          <li><i class="swatch arcane"></i> Inferred step — <b>BloodHound can't see it</b></li>
+          <li><i class="swatch goal"></i> Domain Admins (the exit)</li>
+          <li><i class="swatch user"></i> User <i class="swatch group"></i> Group <i class="swatch comp"></i> Computer</li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- The labyrinth -->
+    <section class="labyrinth">
+      <div id="cy"></div>
+      <div class="empty" id="empty">
+        <div class="glyph">&#x2727;</div>
+        <p>Choose a foothold and trace the thread.</p>
+      </div>
+      <div class="verdict" id="verdict" hidden></div>
+    </section>
+
+    <!-- Thread log -->
+    <aside class="log">
+      <h2 class="eyebrow">The thread <span class="counter" id="stepCount"></span></h2>
+      <ol id="steps" class="steps"></ol>
+      <div class="telemetry" id="telemetry" hidden></div>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

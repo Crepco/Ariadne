@@ -20,13 +20,18 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["matplotlib>=3.7"]          # scaling plots (experiments/run_benchmark.py)
 gemini = ["google-genai>=1.0"]     # optional native Gemini backend
+web = ["flask>=3.0"]               # local visualiser (ariadne-web)
 dev = ["pytest>=8.0"]              # offline unit tests (tests/unit/)
 
 [project.scripts]
-ariadne-chat = "ariadne.chat:main"   # grounded AD security chat assistant
+ariadne-chat = "ariadne.chat:main"       # grounded AD security chat assistant
+ariadne-web = "ariadne.web.app:main"     # local graph/traversal visualiser
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"ariadne.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 # Only the offline unit suite runs by default. The scripts directly under

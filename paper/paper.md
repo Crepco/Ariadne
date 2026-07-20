@@ -84,17 +84,17 @@ from node properties, not edges._
 | Beats BloodHound | 3 of 9 advanced-required |
 | Advanced-case recall | 33.3% (3/9) |
 | Avg tool calls (solved) | 3.58 |
-| Avg runtime (s) | 18.6 |
+| Avg runtime (s) | 20.8 |
 | Agent misses (of truly reachable) | 11/30 |
-| Cost (USD) | $0.0013/run, $0.0390 total |
+| Cost (USD) | $0.0015/run, $0.0444 total |
 
 ### Scaling by graph size
 
 | Nodes | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 216 | 10 | 60.0% | 20.0% | 1 | 5.3 | 18.3 |
-| 481 | 10 | 70.0% | 20.0% | 1 | 4.8 | 17.2 |
-| 813 | 10 | 60.0% | 20.0% | 1 | 6.1 | 20.4 |
+| 216 | 10 | 60.0% | 10.0% | 1 | 5.3 | 18.6 |
+| 481 | 10 | 70.0% | 30.0% | 1 | 5.2 | 19.7 |
+| 813 | 10 | 60.0% | 20.0% | 1 | 7.1 | 24.1 |
 
 **Reading it.** Three points. (1) **The agent beats the rule-based baseline where the
 step is inferred, not traversed** — but partially. Of the 9 cases reachable only through
