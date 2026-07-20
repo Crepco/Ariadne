@@ -163,6 +163,29 @@ body{
 }
 .telemetry b{display:block;font-family:var(--mono);color:var(--parchment);font-size:15px;font-weight:500}
 
+/* ---- assistant chat ---- */
+.chat{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.chatlog{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto}
+.msg{
+  padding:8px 11px;border-radius:9px;font-size:12px;line-height:1.5;
+  white-space:pre-wrap;word-break:break-word;border:1px solid var(--line);
+}
+.msg.user{background:var(--stone);color:var(--parchment);align-self:flex-end;max-width:92%}
+.msg.bot{background:var(--stone-2);border-left:2px solid var(--arcane);color:var(--parchment)}
+.msg.bot.win{border-left-color:var(--thread)}
+.chatform{display:flex;gap:8px}
+.chatform input{
+  flex:1;min-width:0;background:var(--stone-2);border:1px solid var(--line);color:var(--parchment);
+  border-radius:8px;padding:9px 11px;font-family:"Space Grotesk";font-size:12px;
+}
+.chatform input:focus-visible{outline:2px solid var(--arcane);outline-offset:1px}
+.chatform button{
+  flex:0 0 auto;background:var(--stone);border:1px solid var(--line);color:var(--parchment);
+  border-radius:8px;padding:0 15px;cursor:pointer;font-size:12px;font-weight:500;
+}
+.chatform button:hover{border-color:var(--arcane)}
+.chatform button:disabled{opacity:.5;cursor:progress}
+
 /* scrollbars */
 .rail::-webkit-scrollbar,.log::-webkit-scrollbar{width:8px}
 .rail::-webkit-scrollbar-thumb,.log::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}

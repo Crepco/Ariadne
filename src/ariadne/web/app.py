@@ -126,16 +126,14 @@ def api_starts():
     })
 
 
-@app.post("/api/run")
-def api_run():
-    start = (request.get_json(silent=True) or {}).get("start", "").strip()
-    if not start:
-        return jsonify({"error": "Pick a starting node first."}), 400
-
+def _agent_run_payload(start: str, ctx=None) -> dict:
+    """Run the agent from ``start``, verify, and build the full render payload
+    (explored subgraph, the proposed path/thread, steps, verdict)."""
     steps: list[dict] = []
     result = run_agent(start, verbose=False, on_step=lambda s: steps.append(s))
 
-    ctx = ScoringContext.load()
+    if ctx is None:
+        ctx = ScoringContext.load()
     start_oid = ctx.resolve(start)
     if start_oid is None:
         rows = run_read(ctx.driver, "MATCH (n) WHERE toUpper(n.name) STARTS WITH $p "
@@ -165,14 +163,22 @@ def api_run():
         "reasoning": s.get("reasoning", ""), "summary": _observation_summary(s),
     } for s in steps]
 
-    return jsonify({
+    return {
         "start": start, "start_oid": start_oid, "answer": result.answer,
         "steps": steps_out, "nodes": nodes, "edges": edges, "path": path,
         "verdict": score,
         "telemetry": {"tool_calls": result.tool_calls, "steps": result.steps,
                       "seconds": round(result.elapsed_seconds, 1),
                       "cost_usd": round(result.cost_usd, 4)},
-    })
+    }
+
+
+@app.post("/api/run")
+def api_run():
+    start = (request.get_json(silent=True) or {}).get("start", "").strip()
+    if not start:
+        return jsonify({"error": "Pick a starting node first."}), 400
+    return jsonify(_agent_run_payload(start))
 
 
 @app.get("/api/checks")
@@ -192,6 +198,62 @@ def api_check(name):
         out.append({"subject": (f.subject or "").split("@")[0], "oid": oid,
                     "detail": f.detail, "severity": f.severity, "evidence": f.evidence})
     return jsonify({"check": name, "findings": out})
+
+
+# Single-user local tool: one shared conversation state is fine (holds the last
+# path / findings so "explain the last one" works).
+_CHAT_STATE: dict = {}
+
+
+@app.post("/api/chat")
+def api_chat():
+    """Route an English question to a grounded operation and, where it makes
+    sense, return graph data to render (a verified path, or check findings)."""
+    from ariadne import chat as chatmod
+
+    question = (request.get_json(silent=True) or {}).get("message", "").strip()
+    if not question:
+        return jsonify({"error": "Ask a question."}), 400
+
+    ctx = ScoringContext.load()
+    intent = chatmod.route(question)
+    name, args = intent.get("intent"), intent.get("args", {})
+
+    # find a verified escalation path -> draw the thread
+    if name == "find_path":
+        start = (args.get("start") or "").strip()
+        if not start:
+            return jsonify({"answer": "Which node should I start from?", "intent": name})
+        payload = _agent_run_payload(start, ctx)
+        v = payload["verdict"]
+        _CHAT_STATE["last_path"] = [h["from"] for h in payload["path"] if h["from"]] + \
+            ([payload["path"][-1]["to"]] if payload["path"] and payload["path"][-1]["to"] else [])
+        if v.get("beats_bloodhound"):
+            answer = (f"Verified path from {start} — and it BEATS BloodHound: it uses an "
+                      f"inferred step the canonical query can't see. Drawn on the graph.")
+        elif v.get("path_valid"):
+            answer = f"Verified {v.get('agent_hops')}-hop path from {start} to Domain Admins. Drawn on the graph."
+        else:
+            answer = f"No VERIFIED path from {start} — the model's proposal didn't hold up against the graph."
+        return jsonify({"answer": answer, "intent": name, "render": payload})
+
+    # run a vulnerability check -> highlight the subjects
+    if name == "check":
+        cname = args.get("name")
+        if cname not in CHECKS:
+            return jsonify({"answer": f"Unknown check {cname!r}. Try: {', '.join(CHECKS)}", "intent": name})
+        findings = run_check(cname, ctx)
+        _CHAT_STATE["last_findings"] = findings
+        oids = [o for o in (ctx.name_to_oid.get((f.subject or "").upper()) for f in findings) if o]
+        nodes, edges = _subgraph(ctx, set(oids))
+        lines = [f"[{f.severity}] {f.subject.split('@')[0]}: {f.detail}" for f in findings[:12]] or ["No findings."]
+        answer = f"{cname} — {len(findings)} finding(s):\n" + "\n".join(lines)
+        return jsonify({"answer": answer, "intent": name,
+                        "render": {"nodes": nodes, "edges": edges, "path": [], "highlight": oids}})
+
+    # everything else is text: reuse the CLI assistant's grounded executors
+    fn = chatmod._DISPATCH.get(name, chatmod.do_help)
+    return jsonify({"answer": fn(ctx, args, _CHAT_STATE), "intent": name})
 
 
 def main() -> None:

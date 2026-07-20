@@ -281,4 +281,77 @@ async function runCheck(name, btn) {
   }
 }
 
+// -------------------------------------------------------------------------
+// Assistant chat
+// -------------------------------------------------------------------------
+$("chatForm").addEventListener("submit", ask);
+
+async function ask(e) {
+  e.preventDefault();
+  const input = $("chatInput");
+  const q = input.value.trim();
+  if (!q) return;
+  addMsg("user", q);
+  input.value = "";
+  const btn = $("chatForm").querySelector("button");
+  btn.disabled = true;
+  const thinking = addMsg("bot", "…");
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: q }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "chat failed");
+    thinking.textContent = data.answer || "(no answer)";
+    if (data.render) {
+      $("empty").hidden = true;
+      $("verdict").hidden = true;
+      if (data.render.verdict && data.render.verdict.beats_bloodhound) thinking.classList.add("win");
+      if (data.render.path && data.render.path.length) render(data.render);  // verified path -> thread
+      else renderCheckGraph(data.render);                                    // check -> highlight
+    }
+  } catch (err) {
+    thinking.textContent = "Error: " + err.message;
+  } finally {
+    btn.disabled = false;
+    $("chatLog").scrollTop = $("chatLog").scrollHeight;
+  }
+}
+
+function addMsg(role, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  d.textContent = text;
+  $("chatLog").append(d);
+  $("chatLog").scrollTop = $("chatLog").scrollHeight;
+  return d;
+}
+
+function renderCheckGraph(data) {
+  const seen = new Set(data.nodes.map((n) => n.id));
+  const els = [];
+  for (const n of data.nodes)
+    els.push({ data: { id: n.id, label: short(n.name), type: n.type, goal: n.goal, onpath: false } });
+  for (const e of data.edges)
+    if (seen.has(e.source) && seen.has(e.target))
+      els.push({ data: { id: `r-${e.source}-${e.target}-${e.type}`, source: e.source, target: e.target, kind: "real" } });
+  if (!els.length) return;  // nothing to show (no findings) — the text answer stands
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $("cy"), elements: els, minZoom: 0.2, maxZoom: 2.5, style: cyStyle(),
+    layout: { name: "cose", animate: !reduceMotion, animationDuration: 500,
+              nodeRepulsion: 9000, idealEdgeLength: 90, padding: 50 },
+  });
+  const hits = new Set(data.highlight || []);
+  cy.one("layoutstop", () => {
+    cy.nodes().forEach((n) => {
+      if (hits.size && !hits.has(n.id())) { n.addClass("dim"); return; }
+      if (hits.has(n.id()) && !reduceMotion)
+        n.animate({ style: { "overlay-color": COLORS.arcane, "overlay-opacity": 0.4, "overlay-padding": 10 } }, { duration: 300 })
+         .animate({ style: { "overlay-opacity": 0 } }, { duration: 800 });
+    });
+  });
+}
+
 boot();

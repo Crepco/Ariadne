@@ -59,11 +59,21 @@
       <div class="verdict" id="verdict" hidden></div>
     </section>
 
-    <!-- Thread log -->
+    <!-- Thread log + assistant -->
     <aside class="log">
       <h2 class="eyebrow">The thread <span class="counter" id="stepCount"></span></h2>
       <ol id="steps" class="steps"></ol>
       <div class="telemetry" id="telemetry" hidden></div>
+
+      <div class="chat">
+        <h2 class="eyebrow">Ask the assistant</h2>
+        <div id="chatLog" class="chatlog"></div>
+        <form id="chatForm" class="chatform" autocomplete="off">
+          <input id="chatInput" placeholder="find kerberoastable paths to domain admin" aria-label="Ask the assistant" />
+          <button type="submit">Ask</button>
+        </form>
+        <p class="hint">Answers come from the graph — verified paths draw the thread, checks light up nodes. Never guessed.</p>
+      </div>
     </aside>
   </main>
 
