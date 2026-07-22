@@ -21,6 +21,7 @@ from ariadne.agent.loop import run_agent
 from ariadne.checks import CHECKS, run_check
 from ariadne.db import run_read
 from ariadne.evaluation.score import ScoringContext, parse_path_tokens, score_agent_result
+from ariadne.report import domain_report
 
 _STATIC = Path(__file__).parent / "static"
 app = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
@@ -156,8 +157,19 @@ def _agent_run_payload(start: str, ctx=None) -> dict:
             "label": kind[1] if kind else None,
         })
 
+    # BloodHound's canonical shortest path — the rule-based overlay the agent is
+    # measured against. Empty when the canonical query finds nothing (the
+    # beats_bloodhound case), which the frontend renders as a "no path" badge.
+    canonical_oids = ctx.bloodhound_path(start_oid) if start_oid else []
+    canonical = {
+        "reachable": bool(canonical_oids),
+        "hops": (len(canonical_oids) - 1) if canonical_oids else -1,
+        "path": [{"from": a, "to": b} for a, b in zip(canonical_oids, canonical_oids[1:])],
+    }
+
     path_oids = [o for o in resolved if o]
-    nodes, edges = _subgraph(ctx, _discovered_oids(steps, path_oids + ([start_oid] if start_oid else [])))
+    seed_oids = path_oids + canonical_oids + ([start_oid] if start_oid else [])
+    nodes, edges = _subgraph(ctx, _discovered_oids(steps, seed_oids))
     steps_out = [{
         "step": s["step"], "action": s["action"], "input": s.get("input"),
         "reasoning": s.get("reasoning", ""), "summary": _observation_summary(s),
@@ -166,6 +178,7 @@ def _agent_run_payload(start: str, ctx=None) -> dict:
     return {
         "start": start, "start_oid": start_oid, "answer": result.answer,
         "steps": steps_out, "nodes": nodes, "edges": edges, "path": path,
+        "canonical": canonical,
         "verdict": score,
         "telemetry": {"tool_calls": result.tool_calls, "steps": result.steps,
                       "seconds": round(result.elapsed_seconds, 1),
@@ -184,6 +197,13 @@ def api_run():
 @app.get("/api/checks")
 def api_checks():
     return jsonify([{"name": n, "description": d} for n, (_f, d) in CHECKS.items()])
+
+
+@app.get("/api/report")
+def api_report():
+    """A whole-domain audit as markdown (the checks + the beats-BloodHound gap)."""
+    ctx = ScoringContext.load()
+    return jsonify({"markdown": domain_report(ctx)})
 
 
 @app.get("/api/check/<name>")

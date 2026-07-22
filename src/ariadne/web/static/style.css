@@ -6,6 +6,7 @@
   --thread:#f5b83d;        /* Ariadne's golden thread — canonical hop */
   --thread-dim:#8a6c2a;
   --arcane:#37e0c9;        /* inferred step — what BloodHound can't see */
+  --canon:#8a93a6;         /* BloodHound's canonical path — the rule-based overlay */
   --goal:#ff4d6d;          /* Domain Admins */
   --parchment:#ece8dd;     /* primary text */
   --muted:#828aa0;         /* secondary text */
@@ -93,10 +94,22 @@ body{
 .check-btn .count{font-family:var(--mono);color:var(--arcane)}
 .check-btn.empty .count{color:var(--muted)}
 
+.report{
+  margin-top:12px;width:100%;padding:10px;cursor:pointer;
+  font-family:"Space Grotesk";font-weight:600;font-size:12.5px;letter-spacing:.02em;
+  color:var(--parchment);background:var(--stone-2);
+  border:1px solid var(--line);border-radius:8px;
+  transition:border-color .15s ease, color .15s ease;
+}
+.report:hover{border-color:var(--arcane);color:var(--arcane)}
+.report:disabled{opacity:.6;cursor:progress}
+.report:focus-visible{outline:2px solid var(--arcane);outline-offset:2px}
+
 .legend ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;font-size:11.5px;color:var(--muted)}
 .legend b{color:var(--parchment);font-weight:600}
 .swatch{display:inline-block;width:14px;height:14px;border-radius:4px;vertical-align:-2px;margin-right:6px}
 .swatch.thread{background:var(--thread)} .swatch.arcane{background:var(--arcane)}
+.swatch.canon{background:var(--canon)}
 .swatch.goal{background:var(--goal)} .swatch.user{background:var(--user)}
 .swatch.group{background:var(--group)} .swatch.comp{background:var(--comp)}
 
@@ -131,6 +144,9 @@ body{
 .verdict.ok{border-color:var(--thread-dim)} .verdict.ok .sigil{color:var(--thread)}
 .verdict.bad{border-color:#6e2b35} .verdict.bad .sigil{color:var(--goal)}
 .verdict.none .sigil{color:var(--muted)}
+.verdict .canon-note{margin-top:6px;font-size:11px;color:var(--canon)}
+.verdict .canon-note.none{color:var(--goal);opacity:.85}
+.verdict .canon-note b{color:var(--parchment)}
 @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 
 /* ---- thread log ---- */

@@ -2,30 +2,35 @@
 
 | Metric | Value |
 | --- | --- |
-| Runs | 30 |
-| Correctness | 63.3% |
-| Valid-path rate | 63.3% |
-| Hallucination rate | 20.0% |
-| Optimal of paths found | 100.0% (19 found) |
-| Beats BloodHound | 3 of 9 advanced-required |
-| Advanced-case recall | 33.3% (3/9) |
-| Avg tool calls (solved) | 3.58 |
-| Avg runtime (s) | 20.79 |
-| Agent misses (of truly reachable) | 11/30 |
-| Cost (USD) | $0.0015/run, $0.0444 total |
+| Runs | 37 |
+| Correctness | 83.8% |
+| Valid-path rate | 81.1% |
+| Hallucination rate | 0.0% |
+| Optimal of paths found | 100.0% (30 found) |
+| Beats BloodHound | 10 of 12 advanced-required |
+| Advanced-case recall | 83.3% (10/12) |
+| Avg tool calls (solved) | 5.13 |
+| Avg runtime (s) | 24.87 |
+| Agent misses (of truly reachable) | 6/36 |
+| Cost (USD) | $0.0104/run, $0.3838 total |
 
 ### Scaling by graph size
 
 | Nodes | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 216 | 10 | 60.0% | 10.0% | 1 | 5.3 | 18.60 |
-| 481 | 10 | 70.0% | 30.0% | 1 | 5.2 | 19.65 |
-| 813 | 10 | 60.0% | 20.0% | 1 | 7.1 | 24.12 |
+| 222 | 24 | 87.5% | 0.0% | 7 | 6.1 | 21.47 |
+| 487 | 13 | 76.9% | 0.0% | 3 | 6.4 | 31.16 |
+
+### By model
+
+| Model | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) | Avg cost |
+| :-- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| openai/gpt-4o | 11 | 100.0% | 0.0% | 4 | 5.2 | 16.81 | $0.0306 |
+| openai/gpt-4o-mini | 26 | 76.9% | 0.0% | 6 | 6.7 | 28.28 | $0.0018 |
 
 ### Failure-mode breakdown by graph size
 
 | Nodes | correct | hallucinated | gave up (path existed) | ran out of steps | wrong path |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 216 | 6 | 1 | 3 | 0 | 0 |
-| 481 | 7 | 3 | 0 | 0 | 0 |
-| 813 | 6 | 2 | 2 | 0 | 0 |
+| 222 | 21 | 0 | 3 | 0 | 0 |
+| 487 | 10 | 0 | 3 | 0 | 0 |

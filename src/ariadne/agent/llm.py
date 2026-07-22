@@ -64,10 +64,19 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 _OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "512"))
 
+def _env_temperature() -> float:
+    """Sampling temperature from the environment (default 0 = deterministic)."""
+    try:
+        return float(os.getenv("OPENROUTER_TEMPERATURE", "0"))
+    except ValueError:
+        return 0.0
+
+
 _default_provider = os.getenv("LLM_PROVIDER") or ("openrouter" if _OPENROUTER_KEYS else "gemini")
 _state = {
     "provider": _default_provider,
     "model": DEFAULT_OPENROUTER_MODEL if _default_provider == "openrouter" else GEMINI_MODEL,
+    "temperature": _env_temperature(),
 }
 
 # Back-compat snapshot; prefer active_model() for the live value.
@@ -85,6 +94,16 @@ def set_model(model: str, provider: str | None = None) -> None:
     _state["model"] = model
     _state["provider"] = provider or ("openrouter" if "/" in model else "gemini")
     MODEL_NAME = model
+
+
+def active_temperature() -> float:
+    return _state["temperature"]
+
+
+def set_temperature(temperature: float) -> None:
+    """Set the sampling temperature. 0 is deterministic; raise it (e.g. 0.7) so
+    repeated ``--trials`` produce real variance for a variance/CI benchmark."""
+    _state["temperature"] = float(temperature)
 
 
 def _messages_to_prompt(messages: list[Message]) -> str:
@@ -159,7 +178,7 @@ def _openrouter(messages: list[Message], model: str, max_retries: int) -> LLMRes
                 json={
                     "model": model,
                     "messages": messages,
-                    "temperature": 0,
+                    "temperature": _state["temperature"],
                     # Cap the completion budget. The agent only emits a small JSON
                     # object per turn, so ~512 tokens is ample — and it stops
                     # OpenRouter from *reserving* the model's full 16k-token budget

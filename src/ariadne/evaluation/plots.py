@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from .metrics import (  # noqa: E402
     _MODE_LABELS,
     _MODES,
+    _by_model,
     _by_size,
     _failure_modes,
     LOG_FILE,
@@ -144,6 +145,29 @@ def make_plots(path: Path = LOG_FILE, out_dir: Path = RESULTS_DIR) -> list[Path]
     fig.savefig(p, dpi=130)
     plt.close(fig)
     written.append(p)
+
+    # Per-model comparison (only when ≥2 models were swept) — correctness and
+    # hallucination side by side, the capstone multi-model figure.
+    bm = _by_model(df)
+    if not bm.empty:
+        models = [str(m) for m in bm["model"]]
+        idx = np.arange(len(models))
+        width = 0.38
+        fig, ax = plt.subplots(figsize=(max(6, 1.6 * len(models)), 4.2))
+        ax.bar(idx - width / 2, bm["correctness"] * 100, width, label="Correctness", color="#27ae60")
+        ax.bar(idx + width / 2, bm["hallucination"] * 100, width, label="Hallucination", color="#c0392b")
+        ax.set_xticks(idx)
+        ax.set_xticklabels([m.split("/")[-1] for m in models], rotation=15, ha="right", fontsize=8)
+        ax.set_title("Correctness vs. hallucination by model")
+        ax.set_ylabel("%")
+        ax.set_ylim(0, 100)
+        ax.legend(fontsize=8)
+        ax.grid(True, axis="y", alpha=0.3)
+        fig.tight_layout()
+        p = out_dir / "model_comparison.png"
+        fig.savefig(p, dpi=130)
+        plt.close(fig)
+        written.append(p)
 
     for p in written:
         print(f"Wrote {p}")

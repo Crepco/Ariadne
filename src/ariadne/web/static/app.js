@@ -3,6 +3,7 @@
 const COLORS = {
   User: "#5b7ca8", Group: "#9070bf", Computer: "#57a08a", Domain: "#b0563f", Base: "#4a5266",
   goal: "#ff4d6d", thread: "#f5b83d", arcane: "#37e0c9", broken: "#ff4d6d", faint: "#26324a",
+  canon: "#8a93a6",   // BloodHound's canonical shortest path (rule-based overlay)
 };
 const HOP_COLOR = { edge: COLORS.thread, inferred: COLORS.arcane, broken: COLORS.broken };
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -115,6 +116,16 @@ function render(data) {
       els.push({ data: { id: `t-${i}`, source: h.from, target: h.to, kind: h.kind, label: h.label, step: i },
                  classes: "thread-edge" });
   });
+  // BloodHound's canonical shortest path — the rule-based overlay, drawn dim grey.
+  const canon = (data.canonical && data.canonical.path) || [];
+  const canonIds = new Set();
+  canon.forEach((h, i) => {
+    canonIds.add(h.from); canonIds.add(h.to);
+    if (seen.has(h.from) && seen.has(h.to))
+      els.push({ data: { id: `c-${i}`, source: h.from, target: h.to, kind: "canonical" },
+                 classes: "canon-edge" });
+  });
+  data._canonIds = canonIds;
 
   if (cy) cy.destroy();
   cy = cytoscape({
@@ -146,10 +157,14 @@ function cyStyle() {
         "background-color": COLORS.goal, "width": 30, "height": 30, "font-size": 11,
         "text-opacity": 1, "border-color": COLORS.goal, "border-width": 2, "border-opacity": 0.4 } },
     { selector: "node.dim", style: { "opacity": 0.28 } },
+    { selector: "node.canon", style: { "opacity": 0.62 } },   // on BloodHound's path but not the agent's
     { selector: "edge", style: { "curve-style": "bezier", "width": 1,
         "line-color": COLORS.faint, "target-arrow-color": COLORS.faint,
         "target-arrow-shape": "triangle", "arrow-scale": 0.6, "opacity": 0.55 } },
     { selector: "edge.dim", style: { "opacity": 0.12 } },
+    { selector: "edge.canon-edge", style: {    // BloodHound's canonical route: solid, muted grey
+        "width": 2, "line-color": COLORS.canon, "target-arrow-color": COLORS.canon,
+        "target-arrow-shape": "triangle", "arrow-scale": 0.7, "opacity": 0.7, "z-index": 10 } },
     { selector: "edge.thread-edge", style: {
         "width": 3.5, "line-color": hop, "target-arrow-color": hop,
         "arrow-scale": 0.9, "opacity": 1, "z-index": 20, "line-dash-pattern": [7, 6] } },
@@ -159,8 +174,14 @@ function cyStyle() {
 }
 
 function drawThread(data, pathIds) {
-  // Dim everything not on the path, then light the thread hop by hop.
-  cy.nodes().forEach((n) => { if (!pathIds.has(n.id())) n.addClass("dim"); });
+  // Dim everything not on the path, then light the thread hop by hop. Nodes on
+  // BloodHound's canonical path (but not the agent's) stay semi-visible so the
+  // rule-based overlay reads as a faint grey route beside the gold/cyan thread.
+  const canonIds = data._canonIds || new Set();
+  cy.nodes().forEach((n) => {
+    if (pathIds.has(n.id())) return;
+    n.addClass(canonIds.has(n.id()) ? "canon" : "dim");
+  });
   cy.edges().forEach((e) => { if (e.data("kind") === "real") e.addClass("dim"); });
   cy.animate({ fit: { eles: cy.nodes().filter((n) => pathIds.has(n.id())), padding: 70 } },
              { duration: reduceMotion ? 0 : 500 });
@@ -244,8 +265,16 @@ function showVerdict(data) {
   } else {
     cls = "bad"; sigil = "✗"; title = "No valid path"; sub = data.answer || "";
   }
+  // What did BloodHound's rule-based query find? Make the comparison explicit.
+  const c = data.canonical;
+  let canonLine = "";
+  if (c) {
+    canonLine = c.reachable
+      ? `<p class="canon-note">BloodHound canonical path: <b>${c.hops} hop(s)</b> — the grey route.</p>`
+      : `<p class="canon-note none">BloodHound canonical query: <b>no path</b> from here.</p>`;
+  }
   el.className = "verdict " + cls;
-  el.innerHTML = `<div class="sigil">${sigil}</div><div><h3>${title}</h3><p>${sub}</p></div>`;
+  el.innerHTML = `<div class="sigil">${sigil}</div><div><h3>${title}</h3><p>${sub}</p>${canonLine}</div>`;
   el.hidden = false;
 }
 
@@ -353,5 +382,33 @@ function renderCheckGraph(data) {
     });
   });
 }
+
+// -------------------------------------------------------------------------
+// Domain audit report (markdown download)
+// -------------------------------------------------------------------------
+const reportBtn = $("reportBtn");
+if (reportBtn) reportBtn.onclick = async () => {
+  reportBtn.disabled = true;
+  const label = reportBtn.textContent;
+  reportBtn.textContent = "Auditing…";
+  try {
+    const data = await (await fetch("/api/report")).json();
+    if (!data.markdown) throw new Error(data.error || "no report");
+    const blob = new Blob([data.markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ariadne-domain-audit.md";
+    a.click();
+    URL.revokeObjectURL(url);
+    reportBtn.textContent = "Report downloaded ✓";
+    setTimeout(() => { reportBtn.textContent = label; }, 2500);
+  } catch (e) {
+    reportBtn.textContent = "Report failed";
+    setTimeout(() => { reportBtn.textContent = label; }, 2500);
+  } finally {
+    reportBtn.disabled = false;
+  }
+};
 
 boot();

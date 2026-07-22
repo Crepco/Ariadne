@@ -155,6 +155,9 @@ def main() -> None:
     ap.add_argument("--sizes", type=int, nargs="+", default=DEFAULT_SIZES, help="user counts per graph")
     ap.add_argument("--random", type=int, default=3, help="random start users per graph")
     ap.add_argument("--trials", type=int, default=1, help="trials per start user")
+    ap.add_argument("--temperature", type=float, default=None,
+                    help="sampling temperature (default: env/0). Raise it (e.g. 0.7) so --trials>1 "
+                         "produces real variance for a confidence-interval sweep")
     ap.add_argument("--models", nargs="+", default=[llm.active_model()],
                     help="one or more model ids to compare (OpenRouter slugs or a Gemini id)")
     ap.add_argument("--max-steps", type=int, default=None,
@@ -167,6 +170,10 @@ def main() -> None:
 
     from ariadne.agent.loop import MAX_STEPS
     max_steps = args.max_steps if args.max_steps is not None else MAX_STEPS
+
+    if args.temperature is not None:
+        llm.set_temperature(args.temperature)
+    print(f"   sampling temperature = {llm.active_temperature()}")
 
     # Either sweep synthetic sizes, or run once on an ingested BloodHound export.
     if args.source_export:

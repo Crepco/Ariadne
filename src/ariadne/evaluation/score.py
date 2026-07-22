@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from ariadne.config import load_neo4j_config
 from ariadne.db import get_driver, run_read
-from ariadne.inference import INFERENCE_RULES, justifies_hop, true_reachable
+from ariadne.inference import INFERENCE_RULES, classify_hop, true_reachable
 from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, INFERENCE_PROPERTIES
 from ariadne.tools import check_path_exists
 
@@ -143,13 +143,8 @@ class ScoringContext:
         """Classify the step a->b: ('edge', type) for a real canonical edge,
         ('inferred', rule) for a property-justified step, or None if neither
         (which the verifier counts as a hallucination)."""
-        t = self.edge_types.get((a_oid, b_oid))
-        if t is not None:
-            return ("edge", t)
-        rule = justifies_hop(self.props, a_oid, b_oid, self.goal_oid)
-        if rule is not None:
-            return ("inferred", rule)
-        return None
+        return classify_hop(self.edge_types.get((a_oid, b_oid)), self.props,
+                             a_oid, b_oid, self.goal_oid)
 
     def baseline(self, start_oid: str) -> dict:
         """TRUE ground truth: shortest path over canonical edges PLUS property-
@@ -172,6 +167,20 @@ class ScoringContext:
         if not rows:
             return {"reachable": False, "hops": -1}
         return {"reachable": bool(rows[0]["reachable"]), "hops": rows[0]["hops"]}
+
+    def bloodhound_path(self, start_oid: str) -> list[str]:
+        """The BloodHound-equivalent canonical shortest path as an ordered list of
+        node object ids (``[]`` if the canonical query finds none). This is what a
+        rule-based tool would draw — the overlay the reader agent is measured against."""
+        if not self.goal_oid or not self.canonical_filter or not start_oid:
+            return []
+        q = (
+            f"MATCH (s {{objectid:$s}}), (g {{objectid:$g}}) "
+            f"OPTIONAL MATCH p = shortestPath((s)-[:{self.canonical_filter}*1..15]->(g)) "
+            f"RETURN CASE WHEN p IS NULL THEN [] ELSE [n IN nodes(p) | n.objectid] END AS oids"
+        )
+        rows = run_read(self.driver, q, database=self.database, s=start_oid, g=self.goal_oid)
+        return list(rows[0]["oids"]) if rows and rows[0]["oids"] else []
 
 
 # --------------------------------------------------------------------------

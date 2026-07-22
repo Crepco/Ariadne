@@ -65,6 +65,9 @@ _COMPUTER_ACCESS = {
     "DcomUsers": "ExecuteDCOM",
 }
 
+# Computer session-list keys (BHCE splits sessions across several collections).
+_SESSION_KEYS = ("Sessions", "PrivilegedSessions", "RegistrySessions")
+
 
 # ---------------------------------------------------------------------------
 # Reading files
@@ -147,8 +150,12 @@ def build_graph_from_export(
                 "domain": (p.get("domain") or domain).upper(),
                 "hasspn": hasspn,
                 "crackable": _is_crackable(crackable, p),
-                "roastable_target": None,
+                # Inference properties: honour a pre-annotated value if the export
+                # carries one (e.g. an Ariadne round-trip), else leave to derivation.
+                "roastable_target": p.get("roastable_target"),
+                "cred_target": p.get("cred_target"),
                 "unconstraineddelegation": bool(p.get("unconstraineddelegation")),
+                "esc1": bool(p.get("esc1")),
                 "admincount": bool(p.get("admincount")),
                 "highvalue": bool(p.get("highvalue")),
                 "is_dc": bool(p.get("isdc") or p.get("is_dc")),
@@ -159,6 +166,11 @@ def build_graph_from_export(
                 goal_oid = oid
 
             # -- edges from this object --
+            # PrimaryGroupSID: every principal is an implicit member of its primary
+            # group. Real exports lean on this heavily; a synthetic graph rarely has it.
+            pgs = p.get("primarygroupsid") or obj.get("PrimaryGroupSID")
+            if pgs and pgs != oid:
+                edges.add(("MemberOf", oid, pgs))
             if label == "Group":
                 for m in _principals(obj.get("Members")):
                     edges.add(("MemberOf", m, oid))
@@ -171,24 +183,32 @@ def build_graph_from_export(
                 for key, etype in _COMPUTER_ACCESS.items():
                     for src in _principals(obj.get(key)):
                         edges.add((etype, src, oid))
-                for u in _principals(obj.get("Sessions")):
-                    edges.add(("HasSession", oid, u))   # computer -> user
-                    session_host.setdefault(u, oid)
+                for skey in _SESSION_KEYS:
+                    for u in _principals(obj.get(skey)):
+                        edges.add(("HasSession", oid, u))   # computer -> user
+                        session_host.setdefault(u, oid)
 
     # Derive roastable_target: a crackable service account exposed on a host it
     # has a session on (best-effort, since BloodHound doesn't collect this link).
+    # A value pre-annotated on the host (Ariadne round-trip) is left untouched.
     for n in nodes:
         u = n["objectid"]
         if n["props"]["crackable"] and u in session_host:
             host = next((h for h in nodes if h["objectid"] == session_host[u]), None)
-            if host:
+            if host and not host["props"].get("roastable_target"):
                 host["props"]["roastable_target"] = u
 
     return {"nodes": nodes, "edges": edges, "goal": goal_oid, "domain": domain}
 
 
 def _is_crackable(mode: str, props: dict) -> bool:
-    """Heuristic for which SPN accounts have a crackable password."""
+    """Heuristic for which SPN accounts have a crackable password.
+
+    An explicit ``crackable`` property (e.g. an Ariadne round-trip export) wins;
+    otherwise apply the heuristic, since BloodHound cannot know crack-ability.
+    """
+    if props.get("crackable") is not None:
+        return bool(props.get("crackable"))
     if not props.get("hasspn"):
         return False
     if mode == "all-spn":

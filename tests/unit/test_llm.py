@@ -113,6 +113,26 @@ def test_load_keys_parses_and_trims(monkeypatch):
     assert llm._load_keys() == ["a", "b", "c"]
 
 
+def test_set_temperature_flows_into_the_openrouter_payload(monkeypatch):
+    original = llm.active_temperature()
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["temperature"] = json["temperature"]
+        return _FakeResp(200, {"choices": [{"message": {"content": "ok"}}], "usage": {}})
+
+    monkeypatch.setattr(llm, "_OPENROUTER_KEYS", ["k1"])
+    monkeypatch.setattr(llm, "requests", type("R", (), {"post": staticmethod(fake_post),
+                                                        "RequestException": Exception}))
+    try:
+        llm.set_temperature(0.7)
+        assert llm.active_temperature() == 0.7
+        llm._openrouter([{"role": "user", "content": "x"}], "some/model", max_retries=1)
+        assert captured["temperature"] == 0.7   # the configured value reached the request
+    finally:
+        llm.set_temperature(original)
+
+
 def test_set_model_infers_provider_from_slug():
     original_model = llm.active_model()
     original_provider = llm._state["provider"]

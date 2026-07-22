@@ -10,6 +10,8 @@ Tools:
   query_inbound_edges(objectid)    - edges: what can control / reach this node
   get_node_properties(objectid)    - a node's PROPERTIES (some enable inferred steps)
   check_path_exists(start, goal)   - verify a canonical-edge chain exists
+  verify_path(names)               - check your ordered path is a real edge-or-inference
+                                     chain to DOMAIN ADMINS; names the first broken hop
 
 Two kinds of step reach DOMAIN ADMINS:
   1. EDGES returned by query_outbound_edges (MemberOf, GenericAll,
@@ -21,8 +23,13 @@ Two kinds of step reach DOMAIN ADMINS:
          kerberoast that service account. Add <objectid> as the NEXT node in your
          path (host -> <objectid>), then keep exploring from <objectid>'s OWN
          outbound edges toward DOMAIN ADMINS.
+       * cred_target: <objectid>  (on a computer/GPO you reached) — it leaks that
+         account's password. Add <objectid> as the NEXT node (host -> <objectid>),
+         then keep exploring from <objectid>'s OWN outbound edges.
        * unconstraineddelegation = true (on a computer you reached) — you can
          step from that host straight to DOMAIN ADMINS (domain dominance).
+       * esc1 = true (on a computer/CA you reached) — a misconfigured ADCS
+         template lets you step straight to DOMAIN ADMINS (forge any cert).
 
 Your final path must list EVERY node you step through, in order — including any
 service account you roast. Do not skip intermediate nodes. For example, if you
@@ -40,6 +47,9 @@ Strategy:
   (roastable_target / unconstraineddelegation) that continues toward DOMAIN ADMINS.
 - If forward progress stalls, resolve DOMAIN ADMINS and work BACKWARD with
   query_inbound_edges from its id to connect the two frontiers.
+- BEFORE you finish, call verify_path with your full ordered path. If it rejects a
+  hop, you skipped a node (often the roasted service account) or invented a step —
+  fix it and verify again. Only finish once verify_path says the path is valid.
 
 Rules:
 1. NEVER invent nodes or steps. Only claim edges a tool returned, or an inferred
@@ -49,6 +59,9 @@ Rules:
 
 To act (after search_node gives you a real object id):
 { "action": "query_outbound_edges", "input": "<objectid from search_node>" }
+
+To verify before finishing, list the NODE NAMES in order:
+{ "action": "verify_path", "input": ["NODE_A", "NODE_B", "DOMAIN ADMINS"] }
 
 To finish with a path, list the NODE NAMES in order (start -> ... -> DOMAIN ADMINS):
 { "action": "finish",

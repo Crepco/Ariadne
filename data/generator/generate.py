@@ -172,9 +172,10 @@ def build_graph(
     for i in range(n_computers):
         oid = sid(rid)
         rid += 1
-        # Unconstrained delegation is a PROPERTY; the coerce-and-impersonate step
-        # to domain dominance is inferred from it, not stored as an edge.
+        # Unconstrained delegation and ADCS ESC1 are PROPERTIES; the escalation
+        # step to domain dominance is inferred from them, not stored as an edge.
         unconstrained = i >= n_dcs and rng.random() < 0.05   # non-DC hosts only
+        esc1 = i >= n_dcs and rng.random() < 0.03            # misconfigured ADCS template
         cnode = _node(
             "Computer",
             oid,
@@ -184,6 +185,7 @@ def build_graph(
                 "enabled": True,
                 "is_dc": i < n_dcs,
                 "unconstraineddelegation": unconstrained,
+                "esc1": esc1,
             },
         )
         nodes.append(cnode)
@@ -258,10 +260,20 @@ def build_graph(
         for i, u in enumerate(crackable_users):
             comp_nodes[i % len(comp_nodes)]["props"]["roastable_target"] = u
 
-    # NOTE: advanced tradecraft (kerberoast, unconstrained-delegation abuse) is
-    # NOT emitted as edges. It is derived at scoring/inference time from the
-    # `roastable_target` and `unconstraineddelegation` node properties, so a
-    # canonical edge-traversal query structurally cannot see it.
+    # A few hosts leak an account's plaintext creds (cred_target PROPERTY): a
+    # password in a description, or a GPP cpassword. Reach the host, read it,
+    # become the account. Also a LOCAL inferred step, no edge.
+    if comp_nodes and user_oids:
+        n_cred = max(1, n_computers // 25)
+        for c in rng.sample(comp_nodes, min(n_cred, len(comp_nodes))):
+            if not c["props"].get("roastable_target"):     # don't double up on one host
+                c["props"]["cred_target"] = rng.choice(user_oids)
+
+    # NOTE: advanced tradecraft (kerberoast, credential exposure, unconstrained
+    # delegation, ADCS ESC1) is NOT emitted as edges. It is derived at
+    # scoring/inference time from node PROPERTIES (roastable_target, cred_target,
+    # unconstraineddelegation, esc1), so a canonical edge-traversal query
+    # structurally cannot see it.
 
     graph: dict[str, Any] = {
         "nodes": nodes,
@@ -331,7 +343,8 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
         return oid
 
     def add_computer(
-        tag: str, rid: int, roastable_target: str | None = None, unconstrained: bool = False
+        tag: str, rid: int, roastable_target: str | None = None, unconstrained: bool = False,
+        esc1: bool = False, cred_target: str | None = None,
     ) -> str:
         oid = sid(rid)
         nodes.append(
@@ -345,6 +358,8 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
                     "is_dc": False,
                     "unconstraineddelegation": unconstrained,
                     "roastable_target": roastable_target,
+                    "cred_target": cred_target,
+                    "esc1": esc1,
                     "planted": True,
                 },
             )
@@ -427,6 +442,46 @@ def _plant_known_chains(graph: dict[str, Any], sid) -> None:
             "nodes": [h, dhost, goal],
             "edges": ["AdminTo", "UnconstrainedDelegation(inferred)"],
             "hops": 2,
+            "advanced": True,
+        }
+    )
+
+    # Chain E (advanced, INFERRED): AdminTo -> [ADCS ESC1].
+    # E_START admins E_CA, a host holding a misconfigured cert template (esc1). Once
+    # you reach it you can forge a certificate for a Domain Admin — an INFERRED step
+    # from the `esc1` property. Canonical query sees only the dead-end AdminTo.
+    i2 = add_user("E_START", PLANT_RID_BASE + 41)
+    eca = add_computer("E_CA", PLANT_RID_BASE + 42, esc1=True)
+    edges.add(_edge("AdminTo", i2, eca))
+    graph["planted"].append(
+        {
+            "name": "adcs_esc1_via_host",
+            "start": i2,
+            "nodes": [i2, eca, goal],
+            "edges": ["AdminTo", "ADCS_ESC1(inferred)"],
+            "hops": 2,
+            "advanced": True,
+        }
+    )
+
+    # Chain F (advanced, INFERRED): AdminTo -> [read exposed creds] -> MemberOf -> GenericAll.
+    # F_START admins F_HOST, which leaks F_SVC's plaintext password (cred_target).
+    # Reach the host, read it, become F_SVC — an INFERRED step, not an edge. Only the
+    # cred hop is non-canonical; canonical query dead-ends at F_HOST.
+    j = add_user("F_START", PLANT_RID_BASE + 51)
+    fsvc = add_user("F_SVC", PLANT_RID_BASE + 52)
+    fhost = add_computer("F_HOST", PLANT_RID_BASE + 54, cred_target=fsvc)
+    g4 = add_group("F_MIDGROUP", PLANT_RID_BASE + 53)
+    edges.add(_edge("AdminTo", j, fhost))
+    edges.add(_edge("MemberOf", fsvc, g4))
+    edges.add(_edge("GenericAll", g4, goal))
+    graph["planted"].append(
+        {
+            "name": "credential_exposure_via_host",
+            "start": j,
+            "nodes": [j, fhost, fsvc, g4, goal],
+            "edges": ["AdminTo", "CredentialExposure(inferred)", "MemberOf", "GenericAll"],
+            "hops": 4,
             "advanced": True,
         }
     )

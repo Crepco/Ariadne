@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(export OPENROUTER_MODEL=\"google/gemma-4-31b-it:free\")",
+      "Bash(timeout 300 C:/Users/hamza/venvs/ariadne/Scripts/python.exe -c ' *)",
+      "Bash(cp .env \"C:/Users/hamza/AppData/Local/Temp/claude/c--Users-hamza-OneDrive-Ariadne/76d230cd-242a-42c9-aaef-177ae65e7915/scratchpad/env.bak\")",
+      "Bash(sed -i 's|^OPENROUTER_API_KEYS=.*|__TRACKED_VAR__|' .env)",
+      "Bash(sed -E \"s/\\(sk-or-v1-[a-zA-Z0-9]{6}\\)[a-zA-Z0-9]+/\\\\1…[REDACTED]/g\")",
+      "Bash(C:/Users/hamza/venvs/ariadne/Scripts/python.exe -c ' *)"
+    ]
+  }
+}

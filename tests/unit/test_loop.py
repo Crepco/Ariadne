@@ -39,6 +39,63 @@ def test_run_agent_finishes_and_accumulates_usage(monkeypatch):
     assert abs(res.cost_usd - 0.003) < 1e-9
 
 
+def test_invalid_finish_triggers_a_revision_then_accepts(monkeypatch):
+    # First finish drops a node; verify_path rejects it, the agent gets the reason
+    # back, and its corrected second finish is accepted.
+    replies = iter([
+        LLMResult('{"action":"finish","answer":"A -> DOMAIN ADMINS","path":["A","DOMAIN ADMINS"]}', 1, 1, 0.0),
+        LLMResult('{"action":"finish","answer":"A -> SVC -> DOMAIN ADMINS","path":["A","SVC","DOMAIN ADMINS"]}', 1, 1, 0.0),
+    ])
+    verdicts = iter([
+        {"valid": False, "reason": "Hop A -> DOMAIN ADMINS is NOT a real step."},
+        {"valid": True, "hops": []},
+    ])
+    monkeypatch.setattr(loop, "chat", lambda history: next(replies))
+    monkeypatch.setattr(loop, "TOOLS", {"verify_path": lambda path: next(verdicts)})
+
+    res = loop.run_agent("A", max_steps=5, verbose=False)
+
+    assert res.finished is True
+    assert res.path_field == ["A", "SVC", "DOMAIN ADMINS"]   # the repaired path
+    assert res.steps == 2                                    # took a revision turn
+
+
+def test_verify_rejection_budget_is_bounded(monkeypatch):
+    # verify_path always rejects; after max_revisions the finish is accepted anyway
+    # (the loop must not spin forever on a stubborn model).
+    monkeypatch.setattr(
+        loop, "chat",
+        lambda history: LLMResult('{"action":"finish","answer":"A -> DOMAIN ADMINS","path":["A","DOMAIN ADMINS"]}', 1, 1, 0.0),
+    )
+    monkeypatch.setattr(loop, "TOOLS", {"verify_path": lambda path: {"valid": False, "reason": "nope"}})
+
+    res = loop.run_agent("A", max_steps=10, verbose=False, max_revisions=2)
+
+    assert res.finished is True
+    assert res.steps == 3   # 2 rejected revisions + the accepted-anyway finish
+
+
+def test_no_path_finish_skips_verification(monkeypatch):
+    # A NO-PATH finish must never be sent to verify_path (there is nothing to verify).
+    calls = {"verify": 0}
+
+    def _verify(path):
+        calls["verify"] += 1
+        return {"valid": False, "reason": "should not be called"}
+
+    monkeypatch.setattr(
+        loop, "chat",
+        lambda history: LLMResult('{"action":"finish","answer":"NO PATH FOUND","path":[]}', 1, 1, 0.0),
+    )
+    monkeypatch.setattr(loop, "TOOLS", {"verify_path": _verify})
+
+    res = loop.run_agent("A", max_steps=5, verbose=False)
+
+    assert res.finished is True
+    assert res.path_field == []
+    assert calls["verify"] == 0
+
+
 def test_run_agent_reports_unknown_tool_without_counting_a_call(monkeypatch):
     replies = iter([
         LLMResult('{"action":"bogus_tool","input":"x"}', 1, 1, 0.0),

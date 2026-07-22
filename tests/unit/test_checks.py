@@ -53,8 +53,22 @@ def test_unconstrained_delegation_flags_non_dc_hosts_only():
     assert findings[0].severity == "critical"
 
 
+def test_adcs_esc1_flags_esc1_hosts():
+    props = {"ca": {"esc1": True}, "plain": {"esc1": False}}
+    findings = checks.adcs_esc1(_ctx(props, {"ca": "CA.X"}, {}))
+    assert [f.subject for f in findings] == ["CA.X"]
+    assert findings[0].severity == "critical"
+
+
+def test_credential_exposure_flags_cred_target():
+    props = {"host": {"cred_target": "svc"}, "plain": {}}
+    findings = checks.credential_exposure(_ctx(props, {"host": "HOST.X", "svc": "SVC@X"}, {}))
+    assert [f.subject for f in findings] == ["HOST.X"]
+    assert "SVC" in findings[0].detail  # names the exposed account
+
+
 def test_checks_registry_and_run_check():
-    assert "kerberoastable_to_da" in checks.CHECKS
+    assert {"kerberoastable_to_da", "adcs_esc1", "credential_exposure"} <= set(checks.CHECKS)
     props = {"web": {"unconstraineddelegation": True, "is_dc": False}}
     findings = checks.run_check("unconstrained_delegation", _ctx(props, {"web": "WEB"}, {}))
     assert len(findings) == 1

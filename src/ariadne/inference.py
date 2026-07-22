@@ -43,6 +43,16 @@ INFERENCE_RULES = {
         "Coerce a privileged login to an unconstrained-delegation host and reuse "
         "its captured ticket to reach domain dominance."
     ),
+    "CredentialExposure": (
+        "A host or GPO exposes an account's plaintext credentials (a password left "
+        "in a description, or a GPP cpassword in SYSVOL); reach it, read the secret, "
+        "and become that account."
+    ),
+    "ADCS_ESC1": (
+        "Enrol in a misconfigured certificate template (ESC1: it lets the enrollee "
+        "supply an arbitrary subject) to forge a certificate for any principal and "
+        "reach domain dominance."
+    ),
 }
 
 
@@ -60,8 +70,30 @@ def justifies_hop(props: dict, a_oid: str, b_oid: str, goal_oid: str | None) -> 
     a = _props(props, a_oid)
     if a.get("roastable_target") and a.get("roastable_target") == b_oid:
         return "Kerberoast"
+    if a.get("cred_target") and a.get("cred_target") == b_oid:
+        return "CredentialExposure"
     if goal_oid is not None and b_oid == goal_oid and a.get("unconstraineddelegation"):
         return "UnconstrainedDelegation"
+    if goal_oid is not None and b_oid == goal_oid and a.get("esc1"):
+        return "ADCS_ESC1"
+    return None
+
+
+def classify_hop(edge_type: str | None, props: dict, a_oid: str, b_oid: str,
+                 goal_oid: str | None) -> tuple[str, str] | None:
+    """Classify a single step ``a -> b`` given the canonical edge type between them.
+
+    Returns ``("edge", <type>)`` when a real canonical edge connects them,
+    ``("inferred", <rule>)`` when a property justifies the step, or ``None`` when
+    it is neither (a hallucination). This is the ONE place the edge-or-inference
+    decision lives, so the scorer (``score.hop_kind``) and the agent's
+    ``verify_path`` tool always agree.
+    """
+    if edge_type is not None:
+        return ("edge", edge_type)
+    rule = justifies_hop(props, a_oid, b_oid, goal_oid)
+    if rule is not None:
+        return ("inferred", rule)
     return None
 
 
@@ -72,8 +104,13 @@ def _inferred_jumps(props: dict, node: str, goal: str) -> list[str]:
     tgt = p.get("roastable_target")
     if tgt:
         out.append(tgt)                    # kerberoast the exposed service account
+    cred = p.get("cred_target")
+    if cred:
+        out.append(cred)                   # read exposed creds -> become that account
     if p.get("unconstraineddelegation"):
         out.append(goal)                   # unconstrained delegation -> dominance
+    if p.get("esc1"):
+        out.append(goal)                   # ADCS ESC1 -> forge cert -> dominance
     return out
 
 

@@ -52,6 +52,8 @@ def test_planted_chains_are_reachable_and_declared():
         "genericwrite_addmember_nested",
         "kerberoast_via_host_nested",
         "unconstrained_delegation_via_host",
+        "adcs_esc1_via_host",
+        "credential_exposure_via_host",
     }
     report = generate.solvability_report(graph)
     assert report["planted_chains_reachable"] is True
@@ -93,7 +95,10 @@ def test_inference_properties_present():
 def test_advanced_chains_are_planted_and_flagged():
     graph = _build()
     advanced = {p["name"] for p in graph["planted"] if p.get("advanced")}
-    assert advanced == {"kerberoast_via_host_nested", "unconstrained_delegation_via_host"}
+    assert advanced == {
+        "kerberoast_via_host_nested", "unconstrained_delegation_via_host",
+        "adcs_esc1_via_host", "credential_exposure_via_host",
+    }
 
 
 def test_advanced_chains_bloodhound_blind_but_truly_reachable():

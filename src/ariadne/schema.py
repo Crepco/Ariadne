@@ -81,7 +81,12 @@ ALL_EDGE_TYPES = list(CANONICAL_EDGES)
 #                             that account -> a LOCAL inferred step (not an edge).
 #   unconstraineddelegation   Computer trusted for unconstrained delegation ->
 #                             coerce a privileged login and reuse its ticket.
-INFERENCE_PROPERTIES = ["hasspn", "crackable", "roastable_target", "unconstraineddelegation"]
+INFERENCE_PROPERTIES = [
+    "hasspn", "crackable", "roastable_target",   # kerberoast (host exposes crackable SPN)
+    "unconstraineddelegation",                   # coerce + impersonate
+    "cred_target",                               # host/GPO exposes an account's creds
+    "esc1",                                      # misconfigured ADCS template (ESC1)
+]
 
 # --- Well-known groups -----------------------------------------------------
 # RID -> display name, following real AD relative identifiers.

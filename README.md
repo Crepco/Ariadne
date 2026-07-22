@@ -12,23 +12,22 @@ No Windows lab required: the AD graph is generated **synthetically** in the Bloo
 
 ## Results
 
-A sweep with `openai/gpt-4o-mini` (temperature 0), 30 runs across three graph sizes (7 planted + 3 random starts each). Advanced steps here are **inferred from properties**, not edges (see below):
+A two-model sweep (`openai/gpt-4o-mini` and `openai/gpt-4o`, temperature 0), **37 scored runs** across two graph sizes (10 planted + 3 random starts each). Advanced steps here are **inferred from properties**, not edges (see below):
 
-| Nodes | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 216 | 60.0% | 10.0% | 1 | 5.3 | 18.6s |
-| 481 | 70.0% | 30.0% | 1 | 5.2 | 19.7s |
-| 813 | 60.0% | 20.0% | 1 | 7.1 | 24.1s |
+| Model | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg cost |
+| :-- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `openai/gpt-4o` | 11 | 100.0% | 0.0% | 4 | 5.2 | $0.031 |
+| `openai/gpt-4o-mini` | 26 | 76.9% | 0.0% | 6 | 6.7 | $0.002 |
 
-![Scaling behaviour](results/scaling.png)
+![Correctness vs. hallucination by model](results/model_comparison.png)
 
-Overall: **63.3% correct**, every real path it finds is the **shortest one** (19/19 optimal), at about **$0.001/run**. Three findings stand out:
+Overall: **83.8% correct, 0.0% hallucination**, every real path it finds is the **shortest one** (30/30 optimal). Three findings stand out:
 
-- **It finds paths BloodHound's rule-based query structurally can't — but only sometimes.** On the 9 cases reachable *only* through an inferred step, the agent found a real path **3 times** (one at every size), for **33% advanced-case recall**. Every win was the unconstrained-delegation inference (read the host's property → step to Domain Admins). It reliably *fails* the multi-hop kerberoast chain: it explores it correctly but drops the roasted-account node from its final path, so the verifier rejects it. That split — direct inference solved, multi-hop inference not — is the honest headline, and a concrete argument for a stronger model.
-- **Correctness holds roughly flat with size** (60–70%), not collapsing — the 20-step budget and forced name→id resolution keep it from starving on larger graphs; step-exhaustion is ~0 in the failure breakdown.
-- **When it's wrong it fabricates rather than folds** (~20% hallucination), largely the failed roast attempts producing an invalid hop. Forcing a `check_path_exists` confirmation before finishing is the clearest next lever.
+- **It finds paths BloodHound's rule-based query structurally can't.** On the 12 cases reachable *only* through an inferred step, the agent found a real path **10 times — 83% advanced-case recall** (up from 33% before self-verification), spanning all four inference primitives: kerberoast, unconstrained delegation, ADCS ESC1, and credential exposure. These are steps the canonical query cannot follow at all, because they are not edges in the graph.
+- **Self-verification eliminated hallucinations.** Making the agent run its proposed path through the `verify_path` tool before finishing drove the hallucination rate to **0%** and fixed the multi-hop kerberoast chain it used to drop the roasted node from — a rejected hop now sends it back to repair the path instead of shipping an invalid one.
+- **The stronger model is worth it where budget allows.** `gpt-4o` solved **100%** of the runs it completed (vs 77% for `mini`) at ~17× the cost. Its sample is smaller — 15 of its 26 attempts were dropped as OpenRouter credit/rate-limit errors (not counted as misses), so read the 100% as a capped-N signal, not a calibrated rate.
 
-Reproduce with `python experiments/run_benchmark.py` (see [Quickstart](#quickstart)). Full numbers, per-size table, and failure-mode breakdown in [`results/metrics.md`](results/metrics.md). *(Small sample — 30 runs, single model, temperature 0; treat as a pilot.)*
+Reproduce with `python experiments/run_benchmark.py --models openai/gpt-4o-mini openai/gpt-4o` (see [Quickstart](#quickstart)). Full numbers, per-model and per-size tables, and the failure-mode breakdown in [`results/metrics.md`](results/metrics.md).
 
 ---
 
@@ -42,7 +41,7 @@ Reproduce with `python experiments/run_benchmark.py` (see [Quickstart](#quicksta
                            └──►  ground-truth shortest path (Cypher)  =  BloodHound-equivalent baseline
 ```
 
-The agent is **never shown the whole graph as text** — that would reduce the task to pattern-matching. It gets five tools and must explore:
+The agent is **never shown the whole graph as text** — that would reduce the task to pattern-matching. It gets six tools and must explore:
 
 | Tool | What it returns |
 | --- | --- |
@@ -51,8 +50,9 @@ The agent is **never shown the whole graph as text** — that would reduce the t
 | `query_inbound_edges(node)` | What can control / reach this object |
 | `get_node_properties(node)` | A node's **properties** — some enable *inferred* steps that are not edges |
 | `check_path_exists(start, end)` | Whether a canonical-edge chain exists in the graph |
+| `verify_path(names)` | Whether an ordered path is a real edge-or-inference chain to Domain Admins; names the first broken hop |
 
-It runs a minimal **ReAct loop** (reason → call a tool → observe → repeat) and finishes by proposing an ordered attack path. Scoring then verifies that path **hop by hop** against Neo4j: every claimed hop must be a real edge *or* a property-justified inferred step reaching Domain Admins, or it's counted as a hallucination.
+It runs a minimal **ReAct loop** (reason → call a tool → observe → repeat) and, before finishing, must run its proposed path through `verify_path` — a rejected hop sends it back to repair the path instead of shipping an invalid one. Scoring then verifies that path **hop by hop** against Neo4j: every claimed hop must be a real edge *or* a property-justified inferred step reaching Domain Admins, or it's counted as a hallucination. (This self-verification step drove the measured hallucination rate to 0%.)
 
 **Edges vs. inference — where the agent can *genuinely* beat BloodHound.** The graph contains only *canonical* BloodHound edges (`MemberOf`, `GenericAll`, `ForceChangePassword`, …) — exactly what BloodHound's classic "shortest path to Domain Admins" query traverses, our rule-based baseline. Advanced tradecraft is deliberately **not** an edge: a kerberoastable service account is a `hasspn`+`crackable` **property**; an unconstrained-delegation host is an `unconstraineddelegation` **property**. A pure shortest-path query *structurally cannot* follow those steps — there is no edge to follow — but an agent that reads a node's properties can infer them, and the verifier accepts the step only if the property justifies it. When the agent's verified path uses such an inferred step and the canonical query finds nothing, it **`beats_bloodhound`** — and, crucially, that gap can't be closed by adding one edge type to the baseline's filter, because the step isn't in the collected graph at all. That is the honest version of the claim.
 
@@ -60,7 +60,7 @@ It runs a minimal **ReAct loop** (reason → call a tool → observe → repeat)
 
 The same engine drives a practical layer that works on **real** BloodHound data too (ingest an export, then point everything at it):
 
-- **Vulnerability checks** ([`checks.py`](src/ariadne/checks.py)) — deterministic detections (`kerberoastable_to_da`, `unconstrained_delegation`, `dangerous_acls`, `nested_da`, `session_exposure`), each returning findings backed by concrete graph evidence, so they can't hallucinate.
+- **Vulnerability checks** ([`checks.py`](src/ariadne/checks.py)) — deterministic detections (`kerberoastable_to_da`, `unconstrained_delegation`, `adcs_esc1`, `credential_exposure`, `dangerous_acls`, `nested_da`, `session_exposure`), each returning findings backed by concrete graph evidence, so they can't hallucinate. `ariadne-report` rolls them into a whole-domain audit that also flags the paths BloodHound's canonical query can't see.
 - **A grounded chat assistant** ([`chat.py`](src/ariadne/chat.py), run with `ariadne-chat`) — ask in English; an LLM *routes* the question to a check, a verified path search, triage, an explanation, or a read-only Cypher query. The safety invariant: **it never asserts a path or finding the graph doesn't confirm** — every proposed path goes through the verifier, and writes are refused. The LLM routes and explains; the graph and the checks are the truth.
 
 This is the honest framing of "AI + BloodHound": BloodHound (or the synthetic generator) supplies the graph and the deterministic queries; the LLM adds reasoning and a natural-language surface, with a verifier between it and every claim.
@@ -86,6 +86,10 @@ python data/generator/generate.py --wipe
 python data/generator/verify.py            # counts + ground-truth attack paths
 #    … or ingest a real BloodHound / SharpHound export (dir, .zip, or .json):
 python data/ingest/bloodhound.py --from path/to/export --wipe
+#    (no real collection handy? mint a safe BloodHound-shaped sample from synthetic
+#     data, then ingest it exactly like the real thing — see data/ingest/README.md)
+python data/ingest/export_bloodhound.py --out /tmp/sample_export
+python data/ingest/bloodhound.py --from /tmp/sample_export --wipe
 
 # 4. Run the agent once from a planted foothold.
 python run.py
@@ -95,6 +99,7 @@ ariadne-web
 
 # 6. Or talk to the graph: a grounded security chat assistant (every answer verified).
 ariadne-chat      # e.g. "find kerberoastable paths to domain admin", "explain the first one"
+ariadne-report -o audit.md   # whole-domain audit (checks + the "paths BloodHound can't see")
 
 # 7. Run the full benchmark (sweeps graph sizes, scores every run, writes results/).
 python experiments/run_benchmark.py
@@ -109,14 +114,14 @@ Configuration lives entirely in `.env` — see [`.env.example`](.env.example) fo
 | Path | Contents |
 | --- | --- |
 | [`data/generator/`](data/generator/) | Seeded synthetic-graph generator + ground-truth verifier |
-| [`data/ingest/`](data/ingest/) | Ingest a real BloodHound / SharpHound export into Neo4j |
+| [`data/ingest/`](data/ingest/) | Ingest a real BloodHound / SharpHound export into Neo4j (+ a round-trip exporter for a safe sample) |
 | [`data/cypher/`](data/cypher/) | Ground-truth shortest-path Cypher (the BloodHound-equivalent baseline) |
 | [`src/ariadne/tools/`](src/ariadne/tools/) | The 5 graph-query tools the agent calls |
 | [`src/ariadne/agent/`](src/ariadne/agent/) | ReAct loop, prompts, and the LLM backend (OpenRouter / Gemini) |
 | [`src/ariadne/evaluation/`](src/ariadne/evaluation/) | Hop-by-hop verifier, per-run logging, metrics, plots |
 | `src/ariadne/inference.py` | Property-based inference rules (kerberoast, unconstrained delegation) |
 | `src/ariadne/checks.py` | Deterministic vulnerability-check catalog |
-| `src/ariadne/chat.py`, `report.py` | Grounded chat assistant + path explanation / triage |
+| `src/ariadne/chat.py`, `report.py` | Grounded chat assistant + path explanation / triage / whole-domain audit report |
 | [`src/ariadne/web/`](src/ariadne/web/) | Local visualiser (`ariadne-web`) — watch the agent trace its thread |
 | [`src/ariadne/`](src/ariadne/) | Shared `config`, `db`, and `schema` modules |
 | [`experiments/`](experiments/) | The benchmark runner and raw run logs |

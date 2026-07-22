@@ -4,6 +4,7 @@ from .tools import (
     query_inbound_edges,
     get_node_properties,
     check_path_exists,
+    verify_path,
 )
 
 TOOLS = {
@@ -12,4 +13,5 @@ TOOLS = {
     "query_inbound_edges": query_inbound_edges,
     "get_node_properties": get_node_properties,
     "check_path_exists": check_path_exists,
+    "verify_path": verify_path,
 }

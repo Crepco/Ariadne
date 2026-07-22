@@ -132,9 +132,42 @@ def session_exposure(ctx) -> list[Finding]:
     ]
 
 
+def adcs_esc1(ctx) -> list[Finding]:
+    """Hosts with a misconfigured ADCS certificate template (ESC1 -> forge any cert)."""
+    findings = []
+    for oid, p in ctx.props.items():
+        if p.get("esc1"):
+            name = _name(ctx, oid)
+            findings.append(Finding(
+                "adcs_esc1", name,
+                f"Misconfigured certificate template (ESC1) on {name} — an enrollee can "
+                f"forge a certificate for any principal and reach {GOAL_GROUP}.",
+                "critical", [f"{name}: esc1=true"],
+            ))
+    return findings
+
+
+def credential_exposure(ctx) -> list[Finding]:
+    """Hosts/GPOs leaking an account's plaintext credentials (description, GPP cpassword)."""
+    findings = []
+    for oid, p in ctx.props.items():
+        target = p.get("cred_target")
+        if target:
+            name, acct = _name(ctx, oid), _name(ctx, target)
+            findings.append(Finding(
+                "credential_exposure", name,
+                f"{name} exposes {acct}'s plaintext credentials — reach the host, read "
+                f"the secret, and become {acct}.",
+                "high", [f"{name}: cred_target -> {acct}"],
+            ))
+    return findings
+
+
 CHECKS = {
     "kerberoastable_to_da": (kerberoastable_to_da, "Crackable service accounts with a real path to Domain Admins."),
     "unconstrained_delegation": (unconstrained_delegation, "Non-DC hosts trusted for unconstrained delegation."),
+    "adcs_esc1": (adcs_esc1, "Misconfigured ADCS certificate templates (ESC1)."),
+    "credential_exposure": (credential_exposure, "Hosts/GPOs leaking an account's plaintext credentials."),
     "dangerous_acls": (dangerous_acls, "Full-control ACLs over high-value / Tier-Zero objects."),
     "nested_da": (nested_da, "Non-obvious transitive membership in Domain Admins."),
     "session_exposure": (session_exposure, "Privileged sessions stealable from compromised hosts."),

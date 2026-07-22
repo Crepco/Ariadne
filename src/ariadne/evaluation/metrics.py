@@ -55,6 +55,8 @@ def load_results(path: Path = LOG_FILE) -> pd.DataFrame | None:
             df[c] = False
     for c in _NUM_COLS:
         df[c] = pd.to_numeric(df[c], errors="coerce") if c in df else np.nan
+    if "model" not in df:                      # pre-multi-model logs
+        df["model"] = "default"
     return df
 
 
@@ -150,6 +152,23 @@ def _by_size(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("graph_size")
 
 
+def _by_model(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-model aggregates (mirrors ``_by_size``). Empty unless ≥2 models are
+    present, so the breakdown only surfaces for an actual multi-model comparison."""
+    if "model" not in df or df["model"].nunique() < 2:
+        return pd.DataFrame()
+    out = df.groupby("model").agg(
+        runs=("correct", "size"),
+        correctness=("correct", "mean"),
+        hallucination=("hallucinated_edge", "mean"),
+        beats_bloodhound=("beats_bloodhound", "sum"),
+        avg_tool_calls=("tool_calls", "mean"),
+        avg_time=("time_seconds", "mean"),
+        avg_cost=("cost_usd", "mean"),
+    ).reset_index()
+    return out.sort_values("correctness", ascending=False)
+
+
 def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     raw = load_results(path)
     if raw is None or raw.empty:
@@ -195,6 +214,17 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
         print(f"  {int(r['graph_size']):>6}  {int(r['runs']):>4}  "
               f"{_pct(r['correctness']):>8}  {_pct(r['hallucination']):>7}  "
               f"{int(r['beats_bloodhound']):>7}  {r['avg_tool_calls']:>6.1f}  {r['avg_time']:>7.2f}")
+
+    bm = _by_model(df)
+    if not bm.empty:
+        print("\nBy model:")
+        print(f"  {'model':<28}  {'runs':>4}  {'correct':>8}  {'halluc':>7}  {'beatsBH':>7}  "
+              f"{'tools':>6}  {'time(s)':>7}  {'$/run':>8}")
+        for _, r in bm.iterrows():
+            cost = f"${r['avg_cost']:.4f}" if not np.isnan(r["avg_cost"]) else "  n/a"
+            print(f"  {str(r['model']):<28}  {int(r['runs']):>4}  {_pct(r['correctness']):>8}  "
+                  f"{_pct(r['hallucination']):>7}  {int(r['beats_bloodhound']):>7}  "
+                  f"{r['avg_tool_calls']:>6.1f}  {r['avg_time']:>7.2f}  {cost:>8}")
 
     print("\nFailure-mode breakdown by graph size:")
     fm = _failure_modes(df)
@@ -248,6 +278,23 @@ def metrics_markdown(path: Path = LOG_FILE) -> str:
             f"{_pct(r['hallucination'])} | {int(r['beats_bloodhound'])} | "
             f"{r['avg_tool_calls']:.1f} | {r['avg_time']:.2f} |"
         )
+    bm = _by_model(df)
+    if not bm.empty:
+        lines += [
+            "",
+            "### By model",
+            "",
+            "| Model | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) | Avg cost |",
+            "| :-- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for _, r in bm.iterrows():
+            cost = f"${r['avg_cost']:.4f}" if not np.isnan(r["avg_cost"]) else "n/a"
+            lines.append(
+                f"| {r['model']} | {int(r['runs'])} | {_pct(r['correctness'])} | "
+                f"{_pct(r['hallucination'])} | {int(r['beats_bloodhound'])} | "
+                f"{r['avg_tool_calls']:.1f} | {r['avg_time']:.2f} | {cost} |"
+            )
+
     lines += [
         "",
         "### Failure-mode breakdown by graph size",

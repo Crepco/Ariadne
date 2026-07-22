@@ -98,6 +98,41 @@ def test_overall_counts_beats_bloodhound_and_advanced_required(tmp_path):
     assert o["advanced_required"] == 1  # baseline_reachable & not bloodhound_reachable
 
 
+_MODEL_HEADER = (
+    "model,graph_size,correct,path_valid,hallucinated_edge,incomplete,declared_no_path,"
+    "baseline_reachable,bloodhound_reachable,beats_bloodhound,optimal,tool_calls,"
+    "time_seconds,cost_usd,error\n"
+)
+
+
+def test_by_model_compares_two_models(tmp_path):
+    body = (
+        "openai/gpt-4o-mini,210,True,True,False,False,False,True,False,True,True,4,10.0,0.0020,\n"
+        "openai/gpt-4o-mini,210,False,False,True,False,False,True,True,False,False,6,12.0,0.0030,\n"
+        "anthropic/claude,210,True,True,False,False,False,True,False,True,True,3,8.0,0.0100,\n"
+    )
+    p = tmp_path / "r.csv"
+    p.write_text(_MODEL_HEADER + body, encoding="utf-8")
+    df = metrics.valid_runs(metrics.load_results(p))
+    bm = metrics._by_model(df)
+    assert set(bm["model"]) == {"openai/gpt-4o-mini", "anthropic/claude"}
+    # claude solved 1/1 (100%); gpt-4o-mini 1/2 (50%) -> claude ranks first.
+    assert bm.iloc[0]["model"] == "anthropic/claude"
+    assert bm.iloc[0]["correctness"] == 1.0
+    gpt = bm[bm["model"] == "openai/gpt-4o-mini"].iloc[0]
+    assert gpt["runs"] == 2 and gpt["correctness"] == 0.5
+    assert "### By model" in metrics.metrics_markdown(p)  # section appears for >1 model
+
+
+def test_by_model_empty_for_single_model(tmp_path):
+    body = "openai/gpt-4o-mini,210,True,True,False,False,False,True,False,True,True,4,10.0,0.0020,\n"
+    p = tmp_path / "r.csv"
+    p.write_text(_MODEL_HEADER + body, encoding="utf-8")
+    df = metrics.valid_runs(metrics.load_results(p))
+    assert metrics._by_model(df).empty                    # one model -> no breakdown
+    assert "### By model" not in metrics.metrics_markdown(p)
+
+
 def test_classify_assigns_one_bucket_per_run(tmp_path):
     body = (
         "210,True,True,False,False,False,True,True,False,True,4,9,\n"     # correct

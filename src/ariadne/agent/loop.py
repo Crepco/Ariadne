@@ -21,7 +21,8 @@ from .llm import chat
 from .prompts import SYSTEM_PROMPT
 from .tool_registry import TOOLS
 
-MAX_STEPS = 20   # default reasoning-step budget (was 12; large graphs need room)
+MAX_STEPS = 20      # default reasoning-step budget (was 12; large graphs need room)
+MAX_REVISIONS = 2   # how many times a rejected finish may be sent back for repair
 
 
 @dataclass
@@ -53,12 +54,16 @@ that id. Your very first action should resolve the starting node.
 
 You have at most {max_steps} steps. Explore efficiently: from the start's object
 id, follow query_outbound_edges hop by hop toward DOMAIN ADMINS. When you reach a
-Computer or hit a dead end, call get_node_properties on it — a `roastable_target`
-or `unconstraineddelegation` property is an INFERRED step (not an edge) that can
-continue toward DOMAIN ADMINS. If forward progress stalls, resolve DOMAIN ADMINS
-with search_node and work BACKWARD with query_inbound_edges from its id.
+Computer or hit a dead end, call get_node_properties on it — a `roastable_target`,
+`cred_target`, `unconstraineddelegation` or `esc1` property is an INFERRED step
+(not an edge) that continues toward DOMAIN ADMINS. If forward progress stalls,
+resolve DOMAIN ADMINS with search_node and work BACKWARD with query_inbound_edges.
 
-Available tools: search_node, query_outbound_edges, query_inbound_edges, get_node_properties, check_path_exists
+Available tools: search_node, query_outbound_edges, query_inbound_edges, get_node_properties, check_path_exists, verify_path
+
+Before you finish, call verify_path with your ordered path — it tells you whether
+every hop is a real edge-or-inference step and names the FIRST broken one (usually a
+node you skipped, e.g. the service account you roasted). Fix it, then finish.
 
 Respond with ONE JSON object per turn.
 
@@ -68,7 +73,10 @@ Step 1 — resolve the start node to an object id:
 Then act on a REAL object id returned by the tools:
 {{ "action": "query_outbound_edges", "input": "<objectid from search_node>" }}
 
-When done, report the ordered NODE NAMES you walked (start -> ... -> DOMAIN ADMINS):
+When you think you have the path, VERIFY it first (list every node in order):
+{{ "action": "verify_path", "input": ["A", "B", "DOMAIN ADMINS"] }}
+
+Then, once verify_path says valid, report the ordered NODE NAMES you walked:
 {{ "action": "finish", "answer": "A -> B -> DOMAIN ADMINS", "path": ["A", "B", "DOMAIN ADMINS"] }}
 
 If no path to DOMAIN ADMINS exists:
@@ -77,7 +85,7 @@ If no path to DOMAIN ADMINS exists:
 
 
 def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = True,
-              on_step=None) -> AgentResult:
+              on_step=None, verify_finish: bool = True, max_revisions: int = MAX_REVISIONS) -> AgentResult:
     """Run the ReAct loop from ``start_node`` and return structured telemetry.
 
     ``on_step``, if given, is called after each turn with a dict
@@ -91,6 +99,7 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
     ]
 
     tool_calls = 0
+    revisions_used = 0
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
     started = time.perf_counter()
 
@@ -115,13 +124,42 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
             return _result(response.strip(), False, None, tool_calls, step + 1, started, max_steps, usage, history)
 
         if action.get("action") == "finish":
+            answer = str(action.get("answer", "")).strip()
+            path_field = _as_str_list(action.get("path"))
+
+            # Self-verify a proposed (non-empty) path before accepting it. If a hop
+            # is not a real edge-or-inference step — the classic failure is dropping
+            # the roasted service account — feed the broken hop back and let the
+            # agent repair the path for up to ``max_revisions`` turns. NO-PATH
+            # finishes and runs without the verifier tool are accepted unchanged.
+            proposes_path = bool(path_field) and len(path_field) >= 2 and "NO PATH" not in answer.upper()
+            if (verify_finish and proposes_path and revisions_used < max_revisions
+                    and "verify_path" in TOOLS):
+                try:
+                    check = TOOLS["verify_path"](path_field)
+                except Exception as e:            # never block a finish on a verifier fault
+                    check = {"valid": True, "reason": f"verifier unavailable: {e}"}
+                if on_step:
+                    on_step({"step": step + 1, "action": "verify_path",
+                             "input": " -> ".join(path_field), "observation": check,
+                             "reasoning": response})
+                if not check.get("valid", False):
+                    revisions_used += 1
+                    reason = check.get("reason", "The path could not be verified.")
+                    if verbose:
+                        print(f"\nverify_path REJECTED (revision {revisions_used}): {reason}")
+                    history.append({"role": "user", "content":
+                        "Observation:\nverify_path REJECTED your path. " + reason +
+                        "\nRevise it (add the missing node or fix the hop) and call finish again."})
+                    continue
+
             if on_step:
                 on_step({"step": step + 1, "action": "finish", "input": None,
                          "observation": None, "reasoning": response})
             return _result(
-                str(action.get("answer", "")).strip(),
+                answer,
                 True,
-                _as_str_list(action.get("path")),
+                path_field,
                 tool_calls,
                 step + 1,
                 started,

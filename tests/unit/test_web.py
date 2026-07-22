@@ -65,6 +65,15 @@ def test_api_chat_requires_a_message():
     assert webapp.app.test_client().post("/api/chat", json={"message": "  "}).status_code == 400
 
 
+def test_api_report_returns_markdown(monkeypatch):
+    monkeypatch.setattr(webapp.ScoringContext, "load", classmethod(lambda cls: _fake_ctx()))
+    monkeypatch.setattr(webapp, "domain_report", lambda ctx: "# Ariadne domain audit — X\n")
+    r = webapp.app.test_client().get("/api/report")
+    body = r.get_json()
+    assert r.status_code == 200
+    assert body["markdown"].startswith("# Ariadne domain audit")
+
+
 def test_run_agent_on_step_receives_structured_events(monkeypatch):
     replies = iter([
         LLMResult('{"action":"query_outbound_edges","input":"OID"}', 1, 1, 0.0),

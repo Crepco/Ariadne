@@ -26,6 +26,7 @@ dev = ["pytest>=8.0"]              # offline unit tests (tests/unit/)
 [project.scripts]
 ariadne-chat = "ariadne.chat:main"       # grounded AD security chat assistant
 ariadne-web = "ariadne.web.app:main"     # local graph/traversal visualiser
+ariadne-report = "ariadne.report:main"   # whole-domain audit report (markdown)
 
 [tool.setuptools.packages.find]
 where = ["src"]
