@@ -33,7 +33,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from ariadne.schema import CANONICAL_EDGES
+from ariadne.schema import BASE_LABEL, CANONICAL_EDGES
 
 _CANON = set(CANONICAL_EDGES)
 
@@ -223,31 +223,21 @@ def _is_crackable(mode: str, props: dict) -> bool:
 # ---------------------------------------------------------------------------
 def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = None) -> None:
     from ariadne.config import load_neo4j_config
-    from ariadne.db import get_driver, run_write_batches
-    from ariadne.schema import NODE_LABELS
+    from ariadne.db import ensure_indexes, get_driver, node_upsert_query, run_write_batches
 
     if database is None:
         database = load_neo4j_config().database
     driver = get_driver()
-    with driver.session(database=database) as session:
-        for label in NODE_LABELS:
-            session.run(
-                f"CREATE CONSTRAINT {label.lower()}_objectid IF NOT EXISTS "
-                f"FOR (n:{label}) REQUIRE n.objectid IS UNIQUE"
-            ).consume()
-        if wipe:
+    ensure_indexes(driver, database)
+    if wipe:
+        with driver.session(database=database) as session:
             session.run("MATCH (n) DETACH DELETE n").consume()
 
     by_label: dict[str, list[dict]] = defaultdict(list)
     for n in graph["nodes"]:
         by_label[n["label"]].append({"objectid": n["objectid"], "props": n["props"]})
     for label, rows in by_label.items():
-        run_write_batches(
-            driver,
-            f"UNWIND $rows AS row MERGE (n:{label} {{objectid: row.objectid}}) SET n += row.props",
-            rows,
-            database=database,
-        )
+        run_write_batches(driver, node_upsert_query(label), rows, database=database)
 
     by_type: dict[str, list[dict]] = defaultdict(list)
     for etype, src, dst in graph["edges"]:
@@ -257,7 +247,9 @@ def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = 
     for etype, rows in by_type.items():
         run_write_batches(
             driver,
-            f"UNWIND $rows AS row MATCH (a {{objectid: row.src}}) MATCH (b {{objectid: row.dst}}) "
+            f"UNWIND $rows AS row "
+            f"MATCH (a:{BASE_LABEL} {{objectid: row.src}}) "
+            f"MATCH (b:{BASE_LABEL} {{objectid: row.dst}}) "
             f"MERGE (a)-[:{etype}]->(b)",
             rows,
             database=database,

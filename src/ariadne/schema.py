@@ -15,9 +15,11 @@ export — contains only ``CANONICAL_EDGES``: the primitives BloodHound's classi
 rule-based baseline.
 
 Advanced tradecraft (Kerberoasting a service account and cracking it offline;
-abusing unconstrained delegation) is deliberately **not** modelled as edges. It is
-derived from node **properties** (``hasspn`` + ``crackable``,
-``unconstraineddelegation``) by inference rules (see ``ariadne.inference``). Those
+abusing unconstrained delegation; reading credentials a host or GPO leaks;
+forging a certificate through a misconfigured ADCS template) is deliberately
+**not** modelled as edges. It is derived from node **properties** (``hasspn`` +
+``crackable``, ``roastable_target``, ``cred_target``, ``unconstraineddelegation``,
+``esc1``) by inference rules (see ``ariadne.inference``). Those
 steps are never written to Neo4j, so a pure edge-traversal query *structurally
 cannot* find them, while a reasoner can — and every inferred step is machine-
 checkable, so the agent can't fabricate one. That asymmetry is a property of the
@@ -28,6 +30,24 @@ from __future__ import annotations
 
 # --- Node labels -----------------------------------------------------------
 NODE_LABELS = ["Domain", "User", "Group", "Computer"]
+
+# Every node also carries this shared label, in addition to its type label.
+#
+# Why: Neo4j can only use a property index when the pattern names a *label*. Our
+# lookups are by ``objectid`` and don't care about the type, so a label-less
+# ``MATCH (n {objectid: $oid})`` degrades to an AllNodesScan no matter how many
+# per-label constraints exist — every tool call scanning the whole graph. One
+# shared label plus one index on it makes every id lookup a seek. BloodHound CE
+# uses the same trick (its own shared label is likewise called ``Base``).
+BASE_LABEL = "Base"
+
+# The canonical "look a node up by object id" pattern. Use this everywhere rather
+# than hand-writing the match, so no call site silently drifts back to a scan.
+NODE_BY_ID = f"(n:{BASE_LABEL} {{objectid: $oid}})"
+
+# Index names created by the generator and the ingest path.
+BASE_ID_INDEX = "base_objectid"
+NAME_FULLTEXT_INDEX = "node_name_fulltext"
 
 # --- Canonical relationship (edge) types ----------------------------------
 # Membership / structure
@@ -79,6 +99,13 @@ ALL_EDGE_TYPES = list(CANONICAL_EDGES)
 #   roastable_target          On a host Computer: object id of a crackable service
 #                             account it exposes. Reaching the host lets you roast
 #                             that account -> a LOCAL inferred step (not an edge).
+#   cred_target               On a host/GPO: object id of an account whose plaintext
+#                             credentials it leaks (a password in a description, a
+#                             GPP cpassword in SYSVOL). Reach it, read the secret,
+#                             become that account -> another LOCAL inferred step.
+#   esc1                      Host/CA offering a misconfigured certificate template
+#                             (ESC1): enrol, forge a cert for any principal, and
+#                             step straight to domain dominance.
 #   unconstraineddelegation   Computer trusted for unconstrained delegation ->
 #                             coerce a privileged login and reuse its ticket.
 INFERENCE_PROPERTIES = [

@@ -44,7 +44,7 @@ def _fake_ctx():
 
 def test_api_chat_routes_to_grounded_text_executor(monkeypatch):
     import ariadne.chat as chatmod
-    monkeypatch.setattr(webapp.ScoringContext, "load", classmethod(lambda cls: _fake_ctx()))
+    monkeypatch.setattr(webapp.ScoringContext, "cached", classmethod(lambda cls, **kw: _fake_ctx()))
     monkeypatch.setattr(chatmod, "route", lambda q: {"intent": "help", "args": {}})
     r = webapp.app.test_client().post("/api/chat", json={"message": "what can you do?"})
     body = r.get_json()
@@ -54,7 +54,7 @@ def test_api_chat_routes_to_grounded_text_executor(monkeypatch):
 
 def test_api_chat_refuses_write_cypher(monkeypatch):
     import ariadne.chat as chatmod
-    monkeypatch.setattr(webapp.ScoringContext, "load", classmethod(lambda cls: _fake_ctx()))
+    monkeypatch.setattr(webapp.ScoringContext, "cached", classmethod(lambda cls, **kw: _fake_ctx()))
     monkeypatch.setattr(chatmod, "route",
                         lambda q: {"intent": "cypher", "args": {"query": "MATCH (n) DETACH DELETE n"}})
     body = webapp.app.test_client().post("/api/chat", json={"message": "delete everything"}).get_json()
@@ -66,7 +66,7 @@ def test_api_chat_requires_a_message():
 
 
 def test_api_report_returns_markdown(monkeypatch):
-    monkeypatch.setattr(webapp.ScoringContext, "load", classmethod(lambda cls: _fake_ctx()))
+    monkeypatch.setattr(webapp.ScoringContext, "cached", classmethod(lambda cls, **kw: _fake_ctx()))
     monkeypatch.setattr(webapp, "domain_report", lambda ctx: "# Ariadne domain audit — X\n")
     r = webapp.app.test_client().get("/api/report")
     body = r.get_json()

@@ -36,6 +36,7 @@ from typing import Any
 from ariadne.config import DEFAULT_DOMAIN
 from ariadne.inference import true_reachable
 from ariadne.schema import (
+    BASE_LABEL,
     CANONICAL_EDGES,
     CONTROL_EDGES_ANY,
     CONTROL_EDGES_GROUP,
@@ -569,21 +570,15 @@ def solvability_report(graph: dict[str, Any], sample: int = 100) -> dict[str, An
 # ---------------------------------------------------------------------------
 def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = None) -> None:
     from ariadne.config import load_neo4j_config
-    from ariadne.db import get_driver, run_write_batches
-    from ariadne.schema import NODE_LABELS
+    from ariadne.db import ensure_indexes, get_driver, node_upsert_query, run_write_batches
 
     if database is None:
         database = load_neo4j_config().database
     allowed_edges = set(TRAVERSABLE_EDGES)
     driver = get_driver()  # shared process-wide driver; closed at interpreter exit
-    with driver.session(database=database) as session:
-        # Uniqueness constraint per label doubles as an objectid index.
-        for label in NODE_LABELS:
-            session.run(
-                f"CREATE CONSTRAINT {label.lower()}_objectid IF NOT EXISTS "
-                f"FOR (n:{label}) REQUIRE n.objectid IS UNIQUE"
-            ).consume()
-        if wipe:
+    ensure_indexes(driver, database)
+    if wipe:
+        with driver.session(database=database) as session:
             session.run("MATCH (n) DETACH DELETE n").consume()
 
     # Nodes, grouped by label (labels can't be parametrized in Cypher).
@@ -591,13 +586,7 @@ def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = 
     for n in graph["nodes"]:
         by_label[n["label"]].append({"objectid": n["objectid"], "props": n["props"]})
     for label, rows in by_label.items():
-        run_write_batches(
-            driver,
-            f"UNWIND $rows AS row MERGE (n:{label} {{objectid: row.objectid}}) "
-            f"SET n += row.props",
-            rows,
-            database=database,
-        )
+        run_write_batches(driver, node_upsert_query(label), rows, database=database)
 
     # Edges, grouped by type (types can't be parametrized either).
     by_type: dict[str, list[dict]] = defaultdict(list)
@@ -609,7 +598,8 @@ def write_to_neo4j(graph: dict[str, Any], *, wipe: bool, database: str | None = 
         run_write_batches(
             driver,
             f"UNWIND $rows AS row "
-            f"MATCH (a {{objectid: row.src}}) MATCH (b {{objectid: row.dst}}) "
+            f"MATCH (a:{BASE_LABEL} {{objectid: row.src}}) "
+            f"MATCH (b:{BASE_LABEL} {{objectid: row.dst}}) "
             f"MERGE (a)-[:{etype}]->(b)",
             rows,
             database=database,

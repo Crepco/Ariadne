@@ -22,13 +22,17 @@ from ariadne.checks import CHECKS, run_check
 from ariadne.db import run_read
 from ariadne.evaluation.score import ScoringContext, parse_path_tokens, score_agent_result
 from ariadne.report import domain_report
+from ariadne.schema import BASE_LABEL, INFERENCE_PROPERTIES
 
 _STATIC = Path(__file__).parent / "static"
 app = Flask(__name__, static_folder=str(_STATIC), static_url_path="/static")
 
 _LABEL_ORDER = ["Domain", "Group", "Computer", "User"]
-_PROP_KEYS = ("hasspn", "crackable", "roastable_target", "unconstraineddelegation",
-              "admincount", "highvalue", "is_dc")
+# Every property that drives an inference rule, plus the "why does this matter"
+# flags. Derived from the schema so a new inference property shows up in the
+# visualiser automatically instead of being silently invisible (cred_target and
+# esc1 were missing here after they were added to the rules).
+_PROP_KEYS = tuple(INFERENCE_PROPERTIES) + ("admincount", "highvalue", "is_dc")
 
 
 def _primary_label(labels) -> str:
@@ -45,7 +49,7 @@ def _subgraph(ctx, oids):
         return [], []
     nrows = run_read(
         ctx.driver,
-        "MATCH (n) WHERE n.objectid IN $oids "
+        f"MATCH (n:{BASE_LABEL}) WHERE n.objectid IN $oids "
         "RETURN n.objectid AS id, labels(n) AS labels, n.name AS name, properties(n) AS props",
         database=ctx.database, oids=oids,
     )
@@ -60,7 +64,8 @@ def _subgraph(ctx, oids):
         })
     erows = run_read(
         ctx.driver,
-        "MATCH (a)-[r]->(b) WHERE a.objectid IN $oids AND b.objectid IN $oids "
+        f"MATCH (a:{BASE_LABEL})-[r]->(b:{BASE_LABEL}) "
+        "WHERE a.objectid IN $oids AND b.objectid IN $oids "
         "RETURN a.objectid AS s, type(r) AS t, b.objectid AS d",
         database=ctx.database, oids=oids,
     )
@@ -108,7 +113,7 @@ def index():
 @app.get("/api/starts")
 def api_starts():
     """Planted footholds (known answers) + a sample of random users."""
-    ctx = ScoringContext.load()
+    ctx = ScoringContext.cached()
     planted = run_read(
         ctx.driver,
         "MATCH (u:User) WHERE u.planted = true RETURN u.name AS name ORDER BY u.name",
@@ -134,11 +139,14 @@ def _agent_run_payload(start: str, ctx=None) -> dict:
     result = run_agent(start, verbose=False, on_step=lambda s: steps.append(s))
 
     if ctx is None:
-        ctx = ScoringContext.load()
+        ctx = ScoringContext.cached()
     start_oid = ctx.resolve(start)
     if start_oid is None:
-        rows = run_read(ctx.driver, "MATCH (n) WHERE toUpper(n.name) STARTS WITH $p "
-                        "RETURN n.objectid AS oid LIMIT 1", database=ctx.database, p=start.upper())
+        rows = run_read(ctx.driver,
+                        f"MATCH (n:{BASE_LABEL}) "
+                        "WHERE coalesce(n.name_upper, toUpper(n.name)) STARTS WITH $p "
+                        "RETURN n.objectid AS oid LIMIT 1",
+                        database=ctx.database, p=start.upper())
         start_oid = rows[0]["oid"] if rows else None
 
     score = score_agent_result(ctx, result, start_oid) if start_oid else {}
@@ -202,7 +210,7 @@ def api_checks():
 @app.get("/api/report")
 def api_report():
     """A whole-domain audit as markdown (the checks + the beats-BloodHound gap)."""
-    ctx = ScoringContext.load()
+    ctx = ScoringContext.cached()
     return jsonify({"markdown": domain_report(ctx)})
 
 
@@ -210,7 +218,7 @@ def api_report():
 def api_check(name):
     if name not in CHECKS:
         return jsonify({"error": f"Unknown check {name!r}."}), 404
-    ctx = ScoringContext.load()
+    ctx = ScoringContext.cached()
     findings = run_check(name, ctx)
     out = []
     for f in findings:
@@ -235,7 +243,7 @@ def api_chat():
     if not question:
         return jsonify({"error": "Ask a question."}), 400
 
-    ctx = ScoringContext.load()
+    ctx = ScoringContext.cached()
     intent = chatmod.route(question)
     name, args = intent.get("intent"), intent.get("args", {})
 

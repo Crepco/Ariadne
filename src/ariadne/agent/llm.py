@@ -7,23 +7,28 @@ Two backends:
   limits; the model is configurable via ``OPENROUTER_MODEL`` or ``set_model()``.
 * **Gemini** (native free tier) — throttled to stay under 15 requests/min.
 
+The configuration a call needs (provider, model, temperature) lives in an
+:class:`LLMClient`. There is a module-level default one, and ``chat`` /
+``ask_llm`` / ``set_model`` / ``set_temperature`` operate on it, so the simple
+call sites are unchanged. Code that needs two configurations at once — a
+benchmark comparing models, say — constructs its own clients instead of mutating
+global state, which is what makes a concurrent sweep possible.
+
 ``chat(messages)`` is the primary entry point: it takes role-tagged messages
 (``system`` / ``user`` / ``assistant``) and returns an :class:`LLMResult` carrying
 the completion text plus token/cost usage. ``ask_llm(prompt)`` is a thin
-single-turn wrapper that returns just the text. ``active_model()`` reports which
-model is live (for logging) and ``set_model()`` switches it (for multi-model
-benchmarks).
+single-turn wrapper that returns just the text.
 """
 
 from __future__ import annotations
 
-import itertools
 import os
+import random
 import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 from dotenv import load_dotenv
@@ -57,12 +62,13 @@ def _load_keys() -> list[str]:
 
 
 _OPENROUTER_KEYS = _load_keys()
-_key_cycle = itertools.cycle(_OPENROUTER_KEYS) if _OPENROUTER_KEYS else None
 _key_lock = threading.Lock()
+_key_position = 0
 
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 _OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "512"))
+
 
 def _env_temperature() -> float:
     """Sampling temperature from the environment (default 0 = deterministic)."""
@@ -72,58 +78,107 @@ def _env_temperature() -> float:
         return 0.0
 
 
-_default_provider = os.getenv("LLM_PROVIDER") or ("openrouter" if _OPENROUTER_KEYS else "gemini")
-_state = {
-    "provider": _default_provider,
-    "model": DEFAULT_OPENROUTER_MODEL if _default_provider == "openrouter" else GEMINI_MODEL,
-    "temperature": _env_temperature(),
-}
+def _next_key() -> str:
+    """The next API key, round-robin.
+
+    Reads ``_OPENROUTER_KEYS`` on every call rather than closing over an
+    ``itertools.cycle`` built at import time — the cycle version froze whatever
+    the environment held when the module first loaded, so tests (and any runtime
+    key reload) could set the key list and still get the stale iterator.
+    """
+    global _key_position
+    with _key_lock:
+        if not _OPENROUTER_KEYS:
+            raise LLMError("No OPENROUTER_API_KEYS configured in .env")
+        key = _OPENROUTER_KEYS[_key_position % len(_OPENROUTER_KEYS)]
+        _key_position += 1
+        return key
+
+
+def _backoff(attempt: int) -> float:
+    """Seconds to wait before retry ``attempt``: exponential, jittered, capped.
+
+    Jitter matters once more than one run is in flight — without it, several
+    workers rate-limited at the same moment retry in lockstep and get limited
+    again together.
+    """
+    base = min(20.0, 2.0 * (2 ** attempt))
+    return base * (0.5 + random.random() / 2)
+
+
+def _infer_provider(model: str) -> str:
+    """OpenRouter slugs look like ``vendor/model``; Gemini ids don't."""
+    return "openrouter" if "/" in model else "gemini"
+
+
+# --------------------------------------------------------------------------
+# The client
+# --------------------------------------------------------------------------
+@dataclass
+class LLMClient:
+    """One model configuration. Construct your own instead of mutating the default
+    when you need two live at once (e.g. a multi-model benchmark)."""
+
+    model: str = DEFAULT_OPENROUTER_MODEL
+    provider: str | None = None          # inferred from the model slug if omitted
+    temperature: float = field(default_factory=_env_temperature)
+    max_tokens: int = _OPENROUTER_MAX_TOKENS
+
+    def __post_init__(self) -> None:
+        if self.provider is None:
+            self.provider = _infer_provider(self.model)
+
+    @property
+    def max_retries(self) -> int:
+        # A little above the number of rotated keys, so one call can try each
+        # funded key once (402/rate-limit retries rotate the key each attempt).
+        return max(6, len(_OPENROUTER_KEYS) + 1)
+
+    def chat(self, messages: list[Message], *, max_retries: int | None = None) -> LLMResult:
+        retries = self.max_retries if max_retries is None else max_retries
+        if self.provider == "openrouter":
+            return _openrouter(messages, self.model, retries, self.temperature, self.max_tokens)
+        return _gemini(messages, self.model, retries, self.temperature)
+
+
+def _default_client() -> LLMClient:
+    provider = os.getenv("LLM_PROVIDER") or ("openrouter" if _OPENROUTER_KEYS else "gemini")
+    model = DEFAULT_OPENROUTER_MODEL if provider == "openrouter" else GEMINI_MODEL
+    return LLMClient(model=model, provider=provider)
+
+
+_client = _default_client()
 
 # Back-compat snapshot; prefer active_model() for the live value.
-MODEL_NAME = _state["model"]
+MODEL_NAME = _client.model
 
 
 def active_model() -> str:
-    return _state["model"]
+    return _client.model
 
 
 def set_model(model: str, provider: str | None = None) -> None:
     """Switch the model chat/ask_llm uses. Infers the provider from the slug shape
     (``vendor/model`` -> OpenRouter) unless one is given explicitly."""
     global MODEL_NAME
-    _state["model"] = model
-    _state["provider"] = provider or ("openrouter" if "/" in model else "gemini")
+    _client.model = model
+    _client.provider = provider or _infer_provider(model)
     MODEL_NAME = model
 
 
 def active_temperature() -> float:
-    return _state["temperature"]
+    return _client.temperature
 
 
 def set_temperature(temperature: float) -> None:
     """Set the sampling temperature. 0 is deterministic; raise it (e.g. 0.7) so
     repeated ``--trials`` produce real variance for a variance/CI benchmark."""
-    _state["temperature"] = float(temperature)
-
-
-def _messages_to_prompt(messages: list[Message]) -> str:
-    """Flatten role-tagged messages into a single prompt string (Gemini path)."""
-    parts = []
-    for m in messages:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        parts.append(f"Assistant: {content}" if role == "assistant" else content)
-    return "\n".join(parts)
+    _client.temperature = float(temperature)
 
 
 # --------------------------------------------------------------------------
 # OpenRouter backend
 # --------------------------------------------------------------------------
-def _next_key() -> str:
-    with _key_lock:
-        return next(_key_cycle)
-
-
 def _parse_response(resp) -> tuple[str | None, dict]:
     """Return ``(content, usage)`` from a 200 response.
 
@@ -161,9 +216,12 @@ def _usage_fields(usage: dict) -> tuple[int, int, float]:
     )
 
 
-def _openrouter(messages: list[Message], model: str, max_retries: int) -> LLMResult:
+def _openrouter(messages: list[Message], model: str, max_retries: int,
+                temperature: float | None = None, max_tokens: int | None = None) -> LLMResult:
     if not _OPENROUTER_KEYS:
         raise LLMError("No OPENROUTER_API_KEYS configured in .env")
+    temperature = _client.temperature if temperature is None else temperature
+    max_tokens = _OPENROUTER_MAX_TOKENS if max_tokens is None else max_tokens
     last: Exception | None = None
     for attempt in range(max_retries):
         key = _next_key()  # rotate keys to spread per-key rate limits
@@ -178,14 +236,14 @@ def _openrouter(messages: list[Message], model: str, max_retries: int) -> LLMRes
                 json={
                     "model": model,
                     "messages": messages,
-                    "temperature": _state["temperature"],
+                    "temperature": temperature,
                     # Cap the completion budget. The agent only emits a small JSON
                     # object per turn, so ~512 tokens is ample — and it stops
                     # OpenRouter from *reserving* the model's full 16k-token budget
                     # against the account balance, which caused HTTP 402
                     # "requires more credits, or fewer max_tokens" once free credit
                     # ran low.
-                    "max_tokens": _OPENROUTER_MAX_TOKENS,
+                    "max_tokens": max_tokens,
                     # Ask OpenRouter to include the USD cost in the usage block.
                     "usage": {"include": True},
                 },
@@ -198,23 +256,23 @@ def _openrouter(messages: list[Message], model: str, max_retries: int) -> LLMRes
                     return LLMResult(content, pt, ct, cost)
                 # 200 OK but no usable completion; treat as transient and retry.
                 last = RuntimeError(f"OpenRouter 200 without content: {resp.text[:160]}")
-                time.sleep(min(20.0, 2 + attempt * 3))
+                time.sleep(_backoff(attempt))
                 continue
             if resp.status_code == 402:
                 # This key is out of credit ("requires more credits"). Rotate to
                 # the NEXT key immediately (no backoff — more money won't appear by
                 # waiting); with several funded keys the run routes around the dry
                 # one. If every key is exhausted we fail fast after the retries.
-                last = RuntimeError(f"HTTP 402: {resp.text[:160]}")
+                last = LLMError(f"HTTP 402: {resp.text[:160]}")
                 continue
             if resp.status_code in (429, 500, 502, 503):
-                last = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160]}")
-                time.sleep(min(20.0, 2 + attempt * 3))
+                last = LLMError(f"HTTP {resp.status_code}: {resp.text[:160]}")
+                time.sleep(_backoff(attempt))
                 continue
             raise LLMError(f"OpenRouter HTTP {resp.status_code}: {resp.text[:200]}")
         except requests.RequestException as e:
             last = e
-            time.sleep(min(20.0, 2 + attempt * 3))
+            time.sleep(_backoff(attempt))
     raise LLMError(f"OpenRouter unavailable after {max_retries} attempts: {last}")
 
 
@@ -256,13 +314,48 @@ def _retry_delay(err: Exception) -> float:
     return float(m.group(1)) + 1.0 if m else 20.0
 
 
-def _gemini(messages: list[Message], model: str, max_retries: int) -> LLMResult:
-    prompt = _messages_to_prompt(messages)
+def _split_system(messages: list[Message]) -> tuple[str | None, str]:
+    """Separate the system prompt from the conversation.
+
+    Gemini takes the system prompt in its own slot. Flattening it into the
+    conversation text (as this used to) meant the Gemini agent ran on a
+    materially different prompt from the OpenRouter one — the system role became
+    an untagged first line — so the two backends weren't comparable.
+    """
+    system_parts = [m.get("content", "") for m in messages if m.get("role") == "system"]
+    turns = []
+    for m in messages:
+        role = m.get("role", "user")
+        if role == "system":
+            continue
+        content = m.get("content", "")
+        turns.append(f"Assistant: {content}" if role == "assistant" else content)
+    return ("\n".join(system_parts) or None), "\n".join(turns)
+
+
+def _messages_to_prompt(messages: list[Message]) -> str:
+    """Flatten role-tagged messages into a single prompt string (Gemini path)."""
+    system, turns = _split_system(messages)
+    return "\n".join(p for p in (system, turns) if p)
+
+
+def _gemini(messages: list[Message], model: str, max_retries: int,
+            temperature: float | None = None) -> LLMResult:
+    system, prompt = _split_system(messages)
+    temperature = _client.temperature if temperature is None else temperature
     last: Exception | None = None
     for attempt in range(max_retries):
         _throttle()
         try:
-            resp = _gemini_client().models.generate_content(model=model, contents=prompt)
+            # Honour the configured temperature here too. It used to be dropped
+            # on this path, so `--temperature 0.7` silently did nothing on Gemini
+            # and a "variance" sweep produced identical runs.
+            config: dict = {"temperature": temperature}
+            if system:
+                config["system_instruction"] = system
+            resp = _gemini_client().models.generate_content(
+                model=model, contents=prompt, config=config,
+            )
             um = getattr(resp, "usage_metadata", None)
             pt = int(getattr(um, "prompt_token_count", 0) or 0)
             ct = int(getattr(um, "candidates_token_count", 0) or 0)
@@ -270,25 +363,18 @@ def _gemini(messages: list[Message], model: str, max_retries: int) -> LLMResult:
         except Exception as e:  # noqa: BLE001
             last = e
             rate_limited = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-            time.sleep(_retry_delay(e) if rate_limited else 3.0)
+            time.sleep(_retry_delay(e) if rate_limited else _backoff(attempt))
     raise LLMError(f"Gemini unavailable after {max_retries} attempts: {last}")
 
 
 # --------------------------------------------------------------------------
 # Public entry points
 # --------------------------------------------------------------------------
-# Default a bit above the number of rotated keys so a single call can try each
-# funded key once (402/rate-limit retries rotate the key each attempt).
-_DEFAULT_MAX_RETRIES = max(6, len(_OPENROUTER_KEYS) + 1)
-
-
-def chat(messages: list[Message], *, max_retries: int = _DEFAULT_MAX_RETRIES) -> LLMResult:
+def chat(messages: list[Message], *, max_retries: int | None = None) -> LLMResult:
     """Run one chat completion over role-tagged messages, with usage accounting."""
-    if _state["provider"] == "openrouter":
-        return _openrouter(messages, _state["model"], max_retries)
-    return _gemini(messages, _state["model"], max_retries)
+    return _client.chat(messages, max_retries=max_retries)
 
 
-def ask_llm(prompt: str, *, max_retries: int = _DEFAULT_MAX_RETRIES) -> str:
+def ask_llm(prompt: str, *, max_retries: int | None = None) -> str:
     """Single-turn convenience wrapper returning just the completion text."""
     return chat([{"role": "user", "content": prompt}], max_retries=max_retries).text

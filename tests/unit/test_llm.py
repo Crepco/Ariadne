@@ -57,8 +57,9 @@ def test_usage_fields_defaults_and_parsing():
 
 
 def test_chat_dispatches_and_ask_llm_wraps(monkeypatch):
-    monkeypatch.setitem(llm._state, "provider", "openrouter")
-    monkeypatch.setattr(llm, "_openrouter", lambda messages, model, mr: llm.LLMResult("ok", 1, 2, 0.003))
+    monkeypatch.setattr(llm._client, "provider", "openrouter")
+    monkeypatch.setattr(llm, "_openrouter",
+                        lambda messages, model, mr, temp=None, mt=None: llm.LLMResult("ok", 1, 2, 0.003))
     res = llm.chat([{"role": "user", "content": "x"}])
     assert res.text == "ok"
     assert (res.prompt_tokens, res.completion_tokens, res.cost_usd) == (1, 2, 0.003)
@@ -135,16 +136,40 @@ def test_set_temperature_flows_into_the_openrouter_payload(monkeypatch):
 
 def test_set_model_infers_provider_from_slug():
     original_model = llm.active_model()
-    original_provider = llm._state["provider"]
+    original_provider = llm._client.provider
     try:
         llm.set_model("anthropic/claude-x")
         assert llm.active_model() == "anthropic/claude-x"
-        assert llm._state["provider"] == "openrouter"
+        assert llm._client.provider == "openrouter"
 
         llm.set_model("gemini-3.1-flash-lite")
-        assert llm._state["provider"] == "gemini"
+        assert llm._client.provider == "gemini"
 
         llm.set_model("some-model", provider="openrouter")
-        assert llm._state["provider"] == "openrouter"
+        assert llm._client.provider == "openrouter"
     finally:
         llm.set_model(original_model, provider=original_provider)
+
+
+def test_independent_clients_do_not_share_configuration():
+    # The point of LLMClient: a benchmark can hold two models at once without
+    # one set_model call clobbering the other's configuration.
+    a = llm.LLMClient(model="openai/gpt-4o-mini", temperature=0.0)
+    b = llm.LLMClient(model="anthropic/claude-x", temperature=0.7)
+    assert (a.provider, b.provider) == ("openrouter", "openrouter")
+    assert (a.model, a.temperature) == ("openai/gpt-4o-mini", 0.0)
+    assert (b.model, b.temperature) == ("anthropic/claude-x", 0.7)
+    assert llm.LLMClient(model="gemini-3.1-flash-lite").provider == "gemini"
+
+
+def test_split_system_keeps_the_system_prompt_out_of_the_turns():
+    # Gemini takes the system prompt in its own slot; folding it into the
+    # conversation made that backend run a different prompt from OpenRouter's.
+    system, turns = llm._split_system([
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ])
+    assert system == "SYS"
+    assert "SYS" not in turns
+    assert turns == "hello\nAssistant: hi"

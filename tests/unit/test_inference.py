@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from ariadne.inference import INFERENCE_RULES, classify_hop, justifies_hop, true_reachable
+import random
+
+from ariadne.inference import (
+    INFERENCE_RULES,
+    classify_hop,
+    justifies_hop,
+    reverse_reachable,
+    true_reachable,
+)
 
 
 PROPS = {
@@ -86,3 +94,48 @@ def test_true_reachable_unreachable():
     reachable, hops = true_reachable({"start": ["plain"]}, PROPS, "start", "DA")
     assert reachable is False
     assert hops == -1
+
+
+# --- reverse_reachable: the same oracle, answered for everyone at once --------
+def _random_graph(seed: int, n_nodes: int = 25):
+    """A small random graph plus random inference properties."""
+    rng = random.Random(seed)
+    nodes = [f"n{i}" for i in range(n_nodes)] + ["DA"]
+    adjacency: dict[str, list[str]] = {}
+    for node in nodes:
+        adjacency[node] = rng.sample(nodes, rng.randint(0, 3))
+    props: dict[str, dict] = {}
+    for node in rng.sample(nodes, 6):
+        props[node] = rng.choice([
+            {"roastable_target": rng.choice(nodes)},
+            {"cred_target": rng.choice(nodes)},
+            {"unconstraineddelegation": True},
+            {"esc1": True},
+        ])
+    return nodes, adjacency, props
+
+
+def test_reverse_reachable_agrees_with_per_node_true_reachable():
+    # The report used to call true_reachable once per user — O(V*(V+E)). The
+    # backward BFS replaces that with one traversal, so it must agree exactly,
+    # both on WHO reaches the goal and on the hop distance.
+    for seed in range(12):
+        nodes, adjacency, props = _random_graph(seed)
+        distances = reverse_reachable(adjacency, props, "DA")
+        for node in nodes:
+            reachable, hops = true_reachable(adjacency, props, node, "DA")
+            assert reachable == (node in distances), f"seed={seed} node={node}"
+            if reachable:
+                assert distances[node] == hops, f"seed={seed} node={node}"
+
+
+def test_reverse_reachable_without_props_is_the_canonical_baseline():
+    # Passing an empty property map means no inference rule can fire — exactly
+    # the BloodHound canonical-only traversal the report compares against.
+    adjacency = {"start": ["host"], "svc": ["grp"], "grp": ["DA"]}
+    assert "start" in reverse_reachable(adjacency, PROPS, "DA")
+    assert "start" not in reverse_reachable(adjacency, {}, "DA")
+
+
+def test_reverse_reachable_handles_a_missing_goal():
+    assert reverse_reachable({"a": ["b"]}, {}, None) == {}

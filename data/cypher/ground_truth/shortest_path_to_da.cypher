@@ -1,16 +1,24 @@
 // BloodHound-equivalent shortest attack path from a starting principal to Domain
 // Admins. This is the rule-based baseline: its relationship filter is exactly
-// ariadne.schema.CANONICAL_EDGES (the primitives a canonical shortest-path query
-// encodes). The agent — and Ariadne's TRUE-reachability ground truth — traverse a
-// wider set (schema.TRAVERSABLE_EDGES = canonical + ADVANCED_EDGES such as
-// Kerberoastable), so the agent can find real paths this query cannot. score.py
-// builds both filters programmatically so they never drift from the schema.
+// ariadne.schema.CANONICAL_EDGES — the primitives a canonical shortest-path query
+// encodes, and the only edges the graph contains.
+//
+// Ariadne's TRUE-reachability ground truth goes further, but NOT by traversing
+// more edge types: advanced tradecraft (kerberoast, unconstrained delegation,
+// ADCS ESC1, credential exposure) is derived from node PROPERTIES by
+// ariadne.inference, so it is not in this graph as edges at all. That is why this
+// query structurally cannot find those paths, and why the gap can't be closed by
+// widening the filter below. score.py builds the filter programmatically so it
+// never drifts from the schema.
+//
+// The :Base label is carried by every node so this lookup can use an index
+// instead of scanning the whole graph.
 //
 // Parameters:
 //   $start  objectid of the starting node (e.g. a phished user)
 //   $goal   objectid of the DOMAIN ADMINS group
 
-MATCH (s {objectid: $start}), (g {objectid: $goal})
+MATCH (s:Base {objectid: $start}), (g:Base {objectid: $goal})
 MATCH p = shortestPath(
   (s)-[:MemberOf|AdminTo|CanRDP|CanPSRemote|ExecuteDCOM|HasSession
       |ForceChangePassword|AllExtendedRights|AddMember

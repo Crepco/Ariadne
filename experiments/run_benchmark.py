@@ -35,7 +35,11 @@ import sys  # noqa: E402
 import time  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+import json  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
 from ariadne.agent import llm  # noqa: E402
+from ariadne.agent.llm import LLMError  # noqa: E402
 from ariadne.agent.loop import run_agent  # noqa: E402
 from ariadne.db import get_driver, run_read  # noqa: E402
 from ariadne.evaluation.logger import LOG_FILE, log_row, reset_log  # noqa: E402
@@ -48,6 +52,7 @@ REPO = Path(__file__).resolve().parents[1]
 GEN = REPO / "data" / "generator" / "generate.py"
 INGEST = REPO / "data" / "ingest" / "bloodhound.py"
 RESULTS_DIR = REPO / "results"
+RUNS_DIR = RESULTS_DIR / "runs"      # archived raw CSVs + provenance, one pair per sweep
 LOCK = REPO / "experiments" / ".benchmark.lock"
 
 DEFAULT_SIZES = [150, 350, 600]  # user counts -> ~200 / ~460 / ~780 nodes
@@ -113,8 +118,31 @@ def pick_starts(database: str, n_random: int, seed: int = 1337) -> list[dict]:
     )
 
 
-def run_one(ctx: ScoringContext, start: dict, graph_size: int, max_steps: int) -> dict:
-    """Run + score a single agent trial, returning a CSV row (never raises)."""
+def is_infrastructure_error(exc: Exception) -> bool:
+    """True when a run failed because the *harness* broke, not the agent.
+
+    An exhausted API key, a rate limit, or an unreachable endpoint says nothing
+    about whether the model can find the path — but those runs used to be dropped
+    from the metrics, which silently selects for the runs that happened to get
+    through. Classifying them lets the sweep retry instead of discarding.
+    """
+    if isinstance(exc, LLMError):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in (
+        "402", "429", "rate limit", "timeout", "timed out", "connection",
+        "temporarily unavailable", "service unavailable", "resource_exhausted",
+    ))
+
+
+def run_one(ctx: ScoringContext, start: dict, graph_size: int, max_steps: int,
+            *, infra_retries: int = 2) -> dict:
+    """Run + score a single agent trial, returning a CSV row (never raises).
+
+    Infrastructure failures are retried up to ``infra_retries`` times before the
+    run is recorded as an error; anything else is the agent genuinely failing and
+    is scored as such rather than excluded.
+    """
     short = start["name"].split("@")[0]
     row = {
         "model": llm.active_model(),
@@ -124,30 +152,86 @@ def run_one(ctx: ScoringContext, start: dict, graph_size: int, max_steps: int) -
         "start_node": start["oid"],
         "goal": "DOMAIN ADMINS",
     }
-    try:
-        result = run_agent(start["name"], max_steps=max_steps, verbose=False)
-        score = score_agent_result(ctx, result, start["oid"])
-        row.update(score)
-        row.update(
-            tool_calls=result.tool_calls,
-            steps=result.steps,
-            max_steps=result.max_steps,
-            time_seconds=result.elapsed_seconds,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            cost_usd=result.cost_usd,
-            error="",
-        )
-    except Exception as e:  # keep the sweep alive if one run blows up
-        row.update(
-            proposed_path="", path_valid=False, hallucinated_edge=False, correct=False,
-            declared_no_path=False, agent_hops=-1, baseline_reachable="", baseline_hops=-1,
-            bloodhound_reachable="", bloodhound_hops=-1, beats_bloodhound=False,
-            matches_baseline=False, optimal=False, tool_calls=0, steps=0, max_steps=max_steps,
-            time_seconds=0.0, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
-            error=str(e),
-        )
+    last: Exception | None = None
+    for attempt in range(infra_retries + 1):
+        try:
+            result = run_agent(start["name"], max_steps=max_steps, verbose=False)
+            score = score_agent_result(ctx, result, start["oid"])
+            row.update(score)
+            row.update(
+                tool_calls=result.tool_calls,
+                steps=result.steps,
+                max_steps=result.max_steps,
+                time_seconds=result.elapsed_seconds,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                cost_usd=result.cost_usd,
+                attempts=attempt + 1,
+                error="",
+            )
+            return row
+        except Exception as e:  # keep the sweep alive if one run blows up
+            last = e
+            if not is_infrastructure_error(e) or attempt == infra_retries:
+                break
+            delay = min(60.0, 5.0 * (2 ** attempt))
+            print(f"        infra error ({type(e).__name__}), retrying in {delay:.0f}s: {str(e)[:90]}")
+            time.sleep(delay)
+
+    row.update(
+        proposed_path="", path_valid=False, hallucinated_edge=False, correct=False,
+        declared_no_path=False, agent_hops=-1, baseline_reachable="", baseline_hops=-1,
+        bloodhound_reachable="", bloodhound_hops=-1, beats_bloodhound=False,
+        matches_baseline=False, optimal=False, tool_calls=0, steps=0, max_steps=max_steps,
+        time_seconds=0.0, prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
+        attempts=infra_retries + 1,
+        error=str(last),
+    )
     return row
+
+
+def _git_sha() -> str:
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(REPO),
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() if out.returncode == 0 else "unknown"
+    except Exception:  # noqa: BLE001 — provenance is best-effort, never fatal
+        return "unknown"
+
+
+def archive_run(args, attempted: dict, dropped: dict, runs: int, seconds: float):
+    """Copy this sweep's raw CSV into ``results/runs/`` with its provenance.
+
+    Every number in the README and the paper comes from one of these files. The
+    live log is overwritten by the next sweep, so without an archive a published
+    table can't be traced back to the runs that produced it.
+    """
+    if not LOG_FILE.exists():
+        return None
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    slug = "_".join(m.split("/")[-1] for m in args.models)[:60]
+    base = RUNS_DIR / f"{stamp}-{slug}"
+
+    base.with_suffix(".csv").write_text(LOG_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+    base.with_suffix(".json").write_text(json.dumps({
+        "timestamp_utc": stamp,
+        "git_sha": _git_sha(),
+        "models": args.models,
+        "temperature": llm.active_temperature(),
+        "seed": args.seed,
+        "sizes": args.sizes,
+        "random_starts": args.random,
+        "trials": args.trials,
+        "max_steps": args.max_steps,
+        "source_export": args.source_export,
+        "infra_retries": args.infra_retries,
+        "runs": runs,
+        "attempted_per_model": attempted,
+        "dropped_per_model": dropped,
+        "wall_seconds": round(seconds, 1),
+    }, indent=2), encoding="utf-8")
+    return base.with_suffix(".csv")
 
 
 def main() -> None:
@@ -163,6 +247,10 @@ def main() -> None:
     ap.add_argument("--max-steps", type=int, default=None,
                     help="agent reasoning-step budget per run (default: the loop's MAX_STEPS)")
     ap.add_argument("--seed", type=int, default=1337, help="seed for random start-user selection")
+    ap.add_argument("--infra-retries", type=int, default=2,
+                    help="retries for infrastructure failures (rate limit, out of credit, timeout) "
+                         "before a run is dropped. Dropped runs are excluded from the metrics, so "
+                         "retrying keeps the denominator honest (default: 2)")
     ap.add_argument("--from", dest="source_export", default=None,
                     help="run on a real BloodHound export (dir/zip) instead of the synthetic sweep")
     ap.add_argument("--no-restore", action="store_true", help="don't rebuild the default graph at the end")
@@ -194,6 +282,10 @@ def main() -> None:
     reset_log()
     t0 = time.perf_counter()
     run_idx = 0
+    # attempted vs scored, per model — so a model whose runs mostly failed for
+    # infrastructure reasons can't quietly present its survivors as its rate.
+    attempted: dict[str, int] = {}
+    dropped: dict[str, int] = {}
 
     try:
         for _label, setup in setups:
@@ -209,8 +301,12 @@ def main() -> None:
                     for start in starts:
                         for _ in range(args.trials):
                             run_idx += 1
-                            row = run_one(ctx, start, graph_size, max_steps)
+                            row = run_one(ctx, start, graph_size, max_steps,
+                                          infra_retries=args.infra_retries)
                             log_row(row)
+                            attempted[model] = attempted.get(model, 0) + 1
+                            if row["error"]:
+                                dropped[model] = dropped.get(model, 0) + 1
                             verdict = "ERR" if row["error"] else ("OK " if row["correct"] else "MISS")
                             bh = " BEATS-BH" if row.get("beats_bloodhound") else ""
                             print(f"   [{run_idx:>3}] {verdict}  {model:<26} {row['scenario']:<26} "
@@ -220,6 +316,13 @@ def main() -> None:
                 ctx.close()
 
         print(f"\nSwept {run_idx} runs in {time.perf_counter() - t0:.0f}s.\n")
+        print("Run accounting (a scored rate is only as good as its denominator):")
+        for model in args.models:
+            total = attempted.get(model, 0)
+            lost = dropped.get(model, 0)
+            print(f"   {model:<28} attempted {total:>3}, scored {total - lost:>3}"
+                  + (f", DROPPED {lost} to infrastructure errors" if lost else ""))
+        print()
 
         # Deferred so pandas/matplotlib (numpy) aren't resident during the sweep.
         from ariadne.evaluation.metrics import compute_metrics, metrics_markdown
@@ -231,6 +334,10 @@ def main() -> None:
         (RESULTS_DIR / "metrics.md").write_text(metrics_markdown(), encoding="utf-8")
         print(f"Wrote {RESULTS_DIR / 'metrics.md'}")
         print(f"Log: {LOG_FILE}")
+
+        archived = archive_run(args, attempted, dropped, run_idx, time.perf_counter() - t0)
+        if archived:
+            print(f"Archived: {archived}")
 
         if restore:
             print("\nRestoring default graph ...")

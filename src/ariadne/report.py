@@ -18,7 +18,7 @@ from ariadne.agent.llm import chat
 from ariadne.checks import CHECKS, run_all
 from ariadne.db import run_read
 from ariadne.evaluation.score import verify_path
-from ariadne.inference import true_reachable
+from ariadne.inference import reverse_reachable
 from ariadne.schema import GOAL_GROUP
 
 
@@ -86,6 +86,9 @@ def rank_paths(ctx, paths: list[list[str]]) -> list[dict]:
 # ---------------------------------------------------------------------------
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
+# How many findings a single check lists before the report summarises the rest.
+_SHOWN_PER_CHECK = 25
+
 # Checks whose findings are INFERRED tradecraft — property-derived steps a
 # canonical shortest-path query structurally cannot follow (the "beats BloodHound"
 # surface). Maps check name -> the short tradecraft label used in the report.
@@ -123,19 +126,22 @@ def _counts_by_label(ctx) -> tuple[dict[str, int], int]:
 def _foothold_stats(ctx) -> tuple[int, int, int]:
     """(users that reach DA, of those how many ONLY via an inferred step, total users).
 
-    Canonical-only reachability uses an empty property map so no inference fires —
-    exactly the BloodHound baseline. TRUE reachability adds the inference oracle."""
+    Two backward BFS runs from the goal answer for every user at once: one with the
+    inference properties (TRUE reachability) and one with an empty property map, so
+    no rule can fire (exactly the BloodHound canonical baseline). The difference is
+    the set of footholds that escalate *only* through inferred tradecraft.
+
+    This used to run two forward BFS traversals per user — O(V·(V+E)), which never
+    finishes on a real domain.
+    """
     rows = run_read(ctx.driver, "MATCH (u:User) RETURN u.objectid AS oid", database=ctx.database)
-    users = [r["oid"] for r in rows]
-    reach = advanced_only = 0
-    for oid in users:
-        true_ok, _ = true_reachable(ctx.canonical_adj, ctx.props, oid, ctx.goal_oid)
-        if not true_ok:
-            continue
-        reach += 1
-        canon_ok, _ = true_reachable(ctx.canonical_adj, {}, oid, ctx.goal_oid)
-        if not canon_ok:
-            advanced_only += 1
+    users = [r["oid"] for r in rows if r["oid"]]
+
+    true_reach = reverse_reachable(ctx.canonical_adj, ctx.props, ctx.goal_oid)
+    canon_reach = reverse_reachable(ctx.canonical_adj, {}, ctx.goal_oid)
+
+    reach = sum(1 for oid in users if oid in true_reach)
+    advanced_only = sum(1 for oid in users if oid in true_reach and oid not in canon_reach)
     return reach, advanced_only, len(users)
 
 
@@ -187,7 +193,11 @@ def domain_report(ctx) -> str:
         findings = all_findings.get(name, [])
         desc = CHECKS[name][1]
         tag = " _(inferred — BloodHound-blind)_" if name in _INFERRED_CHECKS else ""
-        L.append(f"### {name.replace('_', ' ')} — {len(findings)} finding(s){tag}")
+        # A capped query knows its true total; say so rather than presenting the
+        # cap as the whole picture.
+        total = getattr(findings, "total", len(findings))
+        count = f"{len(findings)} of {total}" if total > len(findings) else str(len(findings))
+        L.append(f"### {name.replace('_', ' ')} — {count} finding(s){tag}")
         L.append(f"_{desc}_")
         if not findings:
             L.append("")
@@ -195,13 +205,14 @@ def domain_report(ctx) -> str:
             L.append("")
             continue
         L.append("")
-        for f in sorted(findings, key=lambda f: _SEV_RANK.get(f.severity, 9))[:25]:
+        for f in sorted(findings, key=lambda f: _SEV_RANK.get(f.severity, 9))[:_SHOWN_PER_CHECK]:
             subj = (f.subject or "?").split("@")[0]
             L.append(f"- **[{f.severity}] {subj}** — {f.detail}")
             for ev in f.evidence:
                 L.append(f"  - `{ev}`")
-        if len(findings) > 25:
-            L.append(f"  - …and {len(findings) - 25} more.")
+        if total > _SHOWN_PER_CHECK:
+            L.append(f"  - …and {total - _SHOWN_PER_CHECK} more"
+                     + (" (query capped)" if getattr(findings, "truncated", False) else "") + ".")
         L.append("")
 
     # -- The headline: paths BloodHound can't see --

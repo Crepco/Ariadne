@@ -85,15 +85,13 @@ def test_domain_report_is_grounded_markdown(monkeypatch):
         return [{"oid": "u1"}, {"oid": "u2"}, {"oid": "u3"}]  # the user list
     monkeypatch.setattr(report, "run_read", fake_run_read)
 
-    # u1 reaches DA ONLY with inference (props truthy) — the beats-BloodHound case;
-    # u2 reaches canonically too; u3 not at all. The canonical call passes {} (falsy).
-    def fake_true(adj, props, oid, goal):
-        if oid == "u1":
-            return (True, 3) if props else (False, -1)
-        if oid == "u2":
-            return (True, 2)
-        return (False, -1)
-    monkeypatch.setattr(report, "true_reachable", fake_true)
+    # One backward BFS from the goal answers for every user at once, so the fake
+    # returns the whole {oid: hops} map. u1 reaches DA ONLY with inference (props
+    # truthy) — the beats-BloodHound case; u2 reaches canonically too; u3 not at
+    # all. The canonical call passes {} (falsy), so no inference rule can fire.
+    def fake_reverse(adj, props, goal):
+        return {"u1": 3, "u2": 2} if props else {"u2": 2}
+    monkeypatch.setattr(report, "reverse_reachable", fake_reverse)
 
     ctx = SimpleNamespace(driver=None, database="neo4j", canonical_adj={}, goal_oid="DA",
                           names={"u1": "PLANT_E@CORP.LOCAL"}, props={"u1": {"esc1": True}})

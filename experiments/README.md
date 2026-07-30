@@ -27,11 +27,40 @@ python experiments/run_benchmark.py --models openai/gpt-4o-mini anthropic/claude
 ```
 
 Flags: `--sizes` (user counts per graph), `--random` (random starts per graph),
-`--trials`, `--models` (one or more, for model-vs-model comparison), `--no-restore`.
+`--trials`, `--temperature`, `--models` (one or more, for model-vs-model comparison),
+`--max-steps`, `--seed`, `--infra-retries`, `--from` (a real BloodHound export),
+`--no-restore`.
+
+## Getting a defensible number
+
+The default sweep runs at **temperature 0**, which makes it reproducible but means extra
+`--trials` are near-duplicates: they add no information about run-to-run variance. The
+confidence intervals in `results/metrics.md` then describe variation *across start nodes*,
+not across samples of the same case.
+
+For a genuine variance estimate:
+
+```bash
+python experiments/run_benchmark.py --sizes 150 350 --random 5 --trials 5 --temperature 0.7
+```
+
+Two things to check before quoting the result:
+
+- **The denominator.** The sweep prints `attempted N, scored M` per model at the end. Runs
+  that die from exhausted credit or rate limits are excluded from the metrics (they aren't
+  the agent being wrong), but a large exclusion means the surviving runs are a selected
+  sample. `--infra-retries` (default 2) retries those failures rather than dropping them —
+  raise it on a flaky connection.
+- **The interval, not the point.** 100% over 11 runs is `100% [74.1–100]`. Overlapping
+  intervals between two models mean the sweep did not separate them.
+
+Each sweep archives its raw CSV and provenance (git SHA, models, temperature, seed, sizes,
+attempted/scored counts) under [`results/runs/`](../results/runs/), so any published table
+can be traced back to the runs behind it.
 
 ## Notes
 
 - **Run one at a time.** A lock file (`.benchmark.lock`) prevents a second run from wiping
   the same database mid-sweep.
 - LLM cost scales with (models × sizes × starts × trials × tool calls) — keep sweeps modest
-  unless you've topped up API credit. At temperature 0, extra `--trials` are near-duplicates.
+  unless you've topped up API credit.

@@ -19,15 +19,19 @@ from __future__ import annotations
 import argparse
 
 from ariadne.db import get_driver, run_read
-from ariadne.schema import GOAL_GROUP, TRAVERSABLE_EDGES
+from ariadne.schema import BASE_LABEL, GOAL_GROUP, TRAVERSABLE_EDGES
 
 
 def counts(driver, database: str = "neo4j") -> None:
     print("Node counts by label:")
+    # Every node also carries the shared :Base label (it exists so id lookups can
+    # use an index); skip it here so the census still reports one row per node.
     for row in run_read(
         driver,
-        "MATCH (n) UNWIND labels(n) AS label RETURN label, count(*) AS n ORDER BY label",
+        "MATCH (n) UNWIND labels(n) AS label WITH label WHERE label <> $base "
+        "RETURN label, count(*) AS n ORDER BY label",
         database=database,
+        base=BASE_LABEL,
     ):
         print(f"  {row['label']:<10} {row['n']}")
 
@@ -67,7 +71,7 @@ def traversable_rel_filter(driver, database: str = "neo4j") -> str:
 def shortest_path(driver, start_oid: str, goal_oid: str, rel: str, database: str = "neo4j"):
     """Return the ground-truth shortest attack path, or None if unreachable."""
     query = f"""
-    MATCH (s {{objectid: $start}}), (g {{objectid: $goal}})
+    MATCH (s:{BASE_LABEL} {{objectid: $start}}), (g:{BASE_LABEL} {{objectid: $goal}})
     MATCH p = shortestPath((s)-[:{rel}*1..15]->(g))
     RETURN [n IN nodes(p) | n.name] AS nodes,
            [r IN relationships(p) | type(r)] AS edges,

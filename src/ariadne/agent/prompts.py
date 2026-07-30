@@ -9,7 +9,9 @@ Tools:
   query_outbound_edges(objectid)   - edges: what this node can control / reach
   query_inbound_edges(objectid)    - edges: what can control / reach this node
   get_node_properties(objectid)    - a node's PROPERTIES (some enable inferred steps)
-  check_path_exists(start, goal)   - verify a canonical-edge chain exists
+  check_path_exists(start_objectid, goal_objectid)
+                                   - verify a canonical-edge chain exists between
+                                     two object ids (takes an OBJECT input, below)
   verify_path(names)               - check your ordered path is a real edge-or-inference
                                      chain to DOMAIN ADMINS; names the first broken hop
 
@@ -59,6 +61,10 @@ Rules:
 
 To act (after search_node gives you a real object id):
 { "action": "query_outbound_edges", "input": "<objectid from search_node>" }
+
+A tool that takes more than one argument takes an OBJECT as its input:
+{ "action": "check_path_exists",
+  "input": { "start_objectid": "<objectid>", "goal_objectid": "<objectid>" } }
 
 To verify before finishing, list the NODE NAMES in order:
 { "action": "verify_path", "input": ["NODE_A", "NODE_B", "DOMAIN ADMINS"] }

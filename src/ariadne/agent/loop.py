@@ -13,6 +13,7 @@ flattened blob.
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 from dataclasses import dataclass, field
@@ -63,7 +64,9 @@ Available tools: search_node, query_outbound_edges, query_inbound_edges, get_nod
 
 Before you finish, call verify_path with your ordered path — it tells you whether
 every hop is a real edge-or-inference step and names the FIRST broken one (usually a
-node you skipped, e.g. the service account you roasted). Fix it, then finish.
+node you skipped, e.g. the service account you roasted). Fix it, then finish. If it
+says a name is AMBIGUOUS, two nodes share that short name — use the full name
+search_node returned (e.g. SVC01@DOMAIN, not SVC01).
 
 Respond with ONE JSON object per turn.
 
@@ -177,10 +180,7 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
             if verbose:
                 print(f"\nCalling {tool}({argument})")
             tool_calls += 1
-            try:
-                observation = TOOLS[tool](argument)
-            except Exception as e:  # a bad tool call shouldn't kill the whole run
-                observation = f"Tool error: {e}"
+            observation = _call_tool(TOOLS[tool], tool, argument)
         if verbose:
             print(observation)
 
@@ -196,6 +196,45 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+def _required_params(fn) -> list[str]:
+    """Parameter names a tool needs, ignoring optional ones like ``database``."""
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):      # builtins / C callables have no signature
+        return []
+    return [p.name for p in params
+            if p.default is inspect.Parameter.empty
+            and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+
+
+def _call_tool(fn, name: str, argument):
+    """Invoke a tool with whatever shape the model produced, or explain the fix.
+
+    Most tools take a single value, but ``check_path_exists`` takes two — and a
+    single-positional dispatch meant every call to it raised ``TypeError`` and
+    was swallowed as an opaque "Tool error", so the tool was effectively dead
+    while still being advertised in the prompt. A dict input is now spread as
+    keyword arguments, and a mismatch produces an observation that *names the
+    parameters*, which is what lets the model retry correctly instead of
+    abandoning the tool.
+    """
+    try:
+        if isinstance(argument, dict):
+            return fn(**argument)
+        needed = _required_params(fn)
+        if len(needed) > 1:
+            return (f"{name} needs {len(needed)} arguments ({', '.join(needed)}). "
+                    f"Call it with an object input, e.g. "
+                    f'{{"action": "{name}", "input": {{"{needed[0]}": "…", "{needed[1]}": "…"}}}}.')
+        return fn(argument)
+    except TypeError as e:
+        needed = _required_params(fn)
+        hint = f" It expects: {', '.join(needed)}." if needed else ""
+        return f"Tool error: {name} was called with the wrong arguments ({e}).{hint}"
+    except Exception as e:  # a bad tool call shouldn't kill the whole run
+        return f"Tool error: {e}"
+
+
 def _result(answer, finished, path_field, tool_calls, steps, started, max_steps, usage, history) -> AgentResult:
     return AgentResult(
         answer=answer,

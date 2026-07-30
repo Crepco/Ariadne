@@ -6,6 +6,11 @@ Cypher directly. They all share the process-wide Neo4j driver
 (see ``ariadne.db.get_driver``) — the driver is never closed here,
 so a whole benchmark sweep reuses one connection pool instead of
 opening and tearing one down on every tool call.
+
+Every node lookup goes through the shared ``:Base`` label (see
+``schema.BASE_LABEL``) so Neo4j can seek an index instead of scanning every node
+in the graph. On a synthetic 200-node graph the difference is invisible; on a
+real BloodHound collection it is the difference between working and not.
 """
 
 from __future__ import annotations
@@ -14,39 +19,84 @@ import re
 
 from ariadne.db import get_driver, run_read
 from ariadne.inference import classify_hop
+from ariadne.resolve import NameIndex, short_name
 from ariadne.schema import (
+    BASE_LABEL,
     CANONICAL_EDGES,
     GOAL_GROUP,
     INFERENCE_PROPERTIES,
     TRAVERSABLE_EDGES,
 )
+from ariadne.verify import as_tool_result, verify_walk
+
+# Cap on how many nodes a name search returns to the agent.
+SEARCH_LIMIT = 25
+
+# Uppercase name, falling back to computing it when the graph predates the
+# derived ``name_upper`` property. Only ever used in queries that scan anyway —
+# an indexed seek must read the bare property, or the index can't be used.
+_NAME_UPPER = "coalesce(n.name_upper, toUpper(n.name))"
+_SHORT_NAME = ("coalesce(n.short_name, "
+               "split(split(toUpper(coalesce(n.name, '')), '@')[0], '.')[0])")
 
 
 def search_node(name_or_type: str, database: str | None = None):
     """
     Search for a node by name, partial name, or label.
 
+    Tries the cheap, indexed lookups first (exact name, exact object id, label)
+    and only falls back to a substring scan when those miss — so the common case
+    of "resolve this name" is a seek rather than a full scan of the graph.
+
     Examples:
         search_node("USER0001")
         search_node("DOMAIN ADMINS")
         search_node("Computer")
     """
+    driver = get_driver()
+    term = (name_or_type or "").strip()
+    if not term:
+        return []
 
-    query = """
-    MATCH (n)
-    WHERE
-        toUpper(n.name) CONTAINS toUpper($search)
-        OR ANY(label IN labels(n)
-               WHERE toUpper(label)=toUpper($search))
-    RETURN
-        labels(n) AS labels,
-        n.name AS name,
-        n.objectid AS objectid
-    ORDER BY name
-    LIMIT 25
-    """
+    # 1. Exact name / object id / short name — all index-backed on :Base.
+    exact = run_read(
+        driver,
+        f"MATCH (n:{BASE_LABEL}) "
+        "WHERE n.objectid = $term OR n.name_upper = $upper OR n.short_name = $upper "
+        "RETURN labels(n) AS labels, n.name AS name, n.objectid AS objectid "
+        f"ORDER BY name LIMIT {SEARCH_LIMIT}",
+        database=database,
+        term=term,
+        upper=term.upper(),
+    )
+    if exact:
+        return exact
 
-    return run_read(get_driver(), query, database=database, search=name_or_type)
+    # 2. Label match (e.g. "Computer") — a label scan, still far cheaper than
+    #    a property scan over every node.
+    label = next((l for l in ("Domain", "User", "Group", "Computer")
+                  if l.upper() == term.upper()), None)
+    if label:
+        return run_read(
+            driver,
+            f"MATCH (n:{label}) RETURN labels(n) AS labels, n.name AS name, "
+            f"n.objectid AS objectid ORDER BY name LIMIT {SEARCH_LIMIT}",
+            database=database,
+        )
+
+    # 3. Substring fallback — inherently a scan, so the coalesce costs nothing
+    #    here and keeps the tool working on a graph written before name_upper
+    #    existed (see data/generator/migrate_base_label.py). The seek above
+    #    deliberately reads the raw property instead, since wrapping it would
+    #    rule out the index.
+    return run_read(
+        driver,
+        f"MATCH (n:{BASE_LABEL}) WHERE {_NAME_UPPER} CONTAINS $upper "
+        "RETURN labels(n) AS labels, n.name AS name, n.objectid AS objectid "
+        f"ORDER BY name LIMIT {SEARCH_LIMIT}",
+        database=database,
+        upper=term.upper(),
+    )
 
 
 def query_outbound_edges(objectid: str, database: str | None = None):
@@ -54,8 +104,8 @@ def query_outbound_edges(objectid: str, database: str | None = None):
     Return everything this node can reach/control.
     """
 
-    query = """
-    MATCH (n {objectid:$oid})-[r]->(m)
+    query = f"""
+    MATCH (n:{BASE_LABEL} {{objectid:$oid}})-[r]->(m)
     RETURN
         type(r) AS relationship,
         labels(m) AS labels,
@@ -81,8 +131,8 @@ def get_node_properties(objectid: str, database: str | None = None):
                                   you forge a cert for anyone -> domain dominance
     """
 
-    query = """
-    MATCH (n {objectid:$oid})
+    query = f"""
+    MATCH (n:{BASE_LABEL} {{objectid:$oid}})
     RETURN
         labels(n) AS labels,
         n.name AS name,
@@ -108,8 +158,8 @@ def query_inbound_edges(objectid: str, database: str | None = None):
     Return everything that can reach/control this node.
     """
 
-    query = """
-    MATCH (n)-[r]->(m {objectid:$oid})
+    query = f"""
+    MATCH (n)-[r]->(m:{BASE_LABEL} {{objectid:$oid}})
     RETURN
         type(r) AS relationship,
         labels(n) AS labels,
@@ -129,13 +179,18 @@ def check_path_exists(
     """
     Verify whether an attack path exists between two objects.
     Returns the shortest path if one exists.
+
+    Takes TWO object ids, so the agent must call it with an object input::
+
+        {"action": "check_path_exists",
+         "input": {"start_objectid": "S-1-…-1105", "goal_objectid": "S-1-…-512"}}
     """
 
     rel_filter = "|".join(TRAVERSABLE_EDGES)
 
     query = f"""
-    MATCH (s {{objectid:$start}})
-    MATCH (g {{objectid:$goal}})
+    MATCH (s:{BASE_LABEL} {{objectid:$start}})
+    MATCH (g:{BASE_LABEL} {{objectid:$goal}})
 
     OPTIONAL MATCH
         p = shortestPath((s)-[:{rel_filter}*1..15]->(g))
@@ -176,47 +231,64 @@ def check_path_exists(
 # --------------------------------------------------------------------------
 # verify_path — self-check a proposed path before finishing
 # --------------------------------------------------------------------------
-def _short(name: str) -> str:
-    """First label of a name (USER@DOM / HOST.DOM -> USER / HOST), upper-cased."""
-    return re.split(r"[@.]", name or "")[0].upper()
+def _index_for_tokens(driver, database, tokens: list[str]) -> NameIndex:
+    """Build a :class:`NameIndex` covering just the nodes a path mentions.
 
-
-def _resolve_names(driver, database, tokens: list[str]):
-    """Map path tokens (names or object ids) to object ids, tolerating short names.
-
-    Mirrors ``score.ScoringContext.resolve`` so the tool and the scorer agree on
-    what a name points to. Returns ``(oids, props, goal_oid)`` where ``oids`` is a
-    list aligned with ``tokens`` (``None`` where a token could not be resolved).
+    This used to load the ENTIRE graph (``MATCH (n) RETURN …``) on every single
+    ``verify_path`` call. A path is at most a handful of nodes, so we fetch only
+    the candidates for its tokens (by object id, full name, or short name) plus
+    the goal node — turning an O(V) scan per call into an O(path) lookup.
     """
     prop_cols = ", ".join(f"n.{p} AS {p}" for p in INFERENCE_PROPERTIES)
+    wanted = [t.strip() for t in tokens if t and t.strip()]
+    uppers = sorted({t.upper() for t in wanted} | {short_name(t) for t in wanted})
+
+    # The indexed columns first (so Neo4j can seek), then the computed fallbacks
+    # so a graph written before those properties existed still resolves — just
+    # by scanning. Correctness must not depend on having run the migration.
     rows = run_read(
         driver,
-        f"MATCH (n) RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
+        f"MATCH (n:{BASE_LABEL}) "
+        "WHERE n.objectid IN $oids OR n.name_upper IN $uppers OR n.short_name IN $uppers "
+        f"   OR {_NAME_UPPER} IN $uppers OR {_SHORT_NAME} IN $uppers "
+        f"RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
         database=database,
+        oids=wanted,
+        uppers=uppers,
     )
-    name_to_oid: dict[str, str] = {}
-    oid_set: set[str] = set()
-    props: dict[str, dict] = {}
-    goal_oid = None
-    for r in rows:
-        oid, name = r["oid"], r["name"]
-        if not oid:
-            continue
-        oid_set.add(oid)
-        props[oid] = {p: r.get(p) for p in INFERENCE_PROPERTIES}
-        if name:
-            name_to_oid[name.upper()] = oid
-            name_to_oid.setdefault(_short(name), oid)
-            if name.upper().startswith(GOAL_GROUP + "@"):
-                goal_oid = oid
+    index = NameIndex.from_rows(rows)
 
-    def resolve(tok: str):
-        t = (tok or "").strip()
-        if t in oid_set:
-            return t
-        return name_to_oid.get(t.upper())
+    # The goal anchors the unconstrained-delegation / ESC1 rules, so look it up
+    # explicitly rather than hoping the agent's path already named it.
+    if index.goal_oid is None:
+        goal_rows = run_read(
+            driver,
+            f"MATCH (g:{BASE_LABEL}:Group) WHERE g.name STARTS WITH $p "
+            f"RETURN g.objectid AS oid, g.name AS name, {prop_cols} LIMIT 1",
+            database=database,
+            p=f"{GOAL_GROUP}@",
+        )
+        for row in goal_rows:
+            index.add(row["oid"], row["name"], {p: row.get(p) for p in INFERENCE_PROPERTIES})
+        index.finalize()
+    return index
 
-    return [resolve(t) for t in tokens], props, goal_oid
+
+def _edge_types_between(driver, database, oids: list[str]) -> dict[tuple[str, str], str]:
+    """Canonical edge types among a small set of nodes, as ``(a, b) -> type``."""
+    present = [o for o in oids if o]
+    if len(present) < 2:
+        return {}
+    rows = run_read(
+        driver,
+        f"MATCH (a:{BASE_LABEL})-[r]->(b:{BASE_LABEL}) "
+        "WHERE a.objectid IN $oids AND b.objectid IN $oids AND type(r) IN $canon "
+        "RETURN a.objectid AS a, b.objectid AS b, type(r) AS t",
+        database=database,
+        oids=present,
+        canon=list(CANONICAL_EDGES),
+    )
+    return {(r["a"], r["b"]): r["t"] for r in rows}
 
 
 def _parse_path_arg(path) -> list[str]:
@@ -235,59 +307,27 @@ def verify_path(path, database: str | None = None):
     or a JSON list). Every consecutive step must be either a canonical **edge** in
     the graph or a property-**inferred** step; the goal must be DOMAIN ADMINS. The
     result names the FIRST broken hop so you can fix it (usually a skipped node),
-    using the SAME edge-or-inference rule the scorer uses — so a path this tool
-    calls valid is the path that will score as correct.
+    using the SAME walk the scorer uses (``ariadne.verify.verify_walk``) — so a
+    path this tool calls valid is the path that will score as correct.
     """
     tokens = _parse_path_arg(path)
     if len(tokens) < 2:
-        return {"valid": False, "reason": "A path needs at least two nodes (start -> ... -> DOMAIN ADMINS)."}
+        return {"valid": False,
+                "reason": "A path needs at least two nodes (start -> ... -> DOMAIN ADMINS)."}
 
     driver = get_driver()
-    resolved, props, goal_oid = _resolve_names(driver, database, tokens)
+    index = _index_for_tokens(driver, database, tokens)
+    resolved, unknown, ambiguous = index.resolve_all(tokens)
+    edge_type = _edge_types_between(driver, database, resolved)
 
-    unresolved = [t for t, o in zip(tokens, resolved) if o is None]
-    if unresolved:
-        return {"valid": False, "unresolved": unresolved,
-                "reason": f"These names do not exist in the graph: {', '.join(unresolved)}. "
-                          f"Use exact names returned by search_node."}
-
-    # Canonical edge types between the specific (a,b) pairs on the path.
-    pairs = list(zip(resolved, resolved[1:]))
-    edge_type: dict[tuple[str, str], str] = {}
-    rows = run_read(
-        driver,
-        "MATCH (a)-[r]->(b) WHERE a.objectid IN $oids AND b.objectid IN $oids "
-        "AND type(r) IN $canon RETURN a.objectid AS a, b.objectid AS b, type(r) AS t",
-        database=database,
-        oids=resolved,
-        canon=list(CANONICAL_EDGES),
+    record = verify_walk(
+        tokens,
+        resolved,
+        hop_kind=lambda a, b: classify_hop(
+            edge_type.get((a, b)), index.props, a, b, index.goal_oid
+        ),
+        goal_oid=index.goal_oid,
+        unknown=unknown,
+        ambiguous=ambiguous,
     )
-    for r in rows:
-        edge_type[(r["a"], r["b"])] = r["t"]
-
-    hops = []
-    first_bad = None
-    derived = 0
-    for i, (a, b) in enumerate(pairs):
-        kind = classify_hop(edge_type.get((a, b)), props, a, b, goal_oid)
-        ok = kind is not None
-        if kind and kind[0] == "inferred":
-            derived += 1
-        hops.append({"from": tokens[i], "to": tokens[i + 1],
-                     "step": (kind[1] if kind else None), "valid": ok})
-        if not ok and first_bad is None:
-            first_bad = i
-
-    reaches_goal = resolved[-1] == goal_oid
-    valid = first_bad is None and reaches_goal
-    out = {"valid": valid, "hops": hops, "derived_steps": derived, "reaches_goal": reaches_goal}
-    if first_bad is not None:
-        a_name, b_name = tokens[first_bad], tokens[first_bad + 1]
-        out["reason"] = (
-            f"Hop {a_name} -> {b_name} is NOT a real step (no canonical edge and no "
-            f"inferred rule justifies it). You likely skipped a node between them — "
-            f"re-check {a_name}'s outbound edges and properties."
-        )
-    elif not reaches_goal:
-        out["reason"] = f"The path does not end at {GOAL_GROUP}; the last node must be DOMAIN ADMINS."
-    return out
+    return as_tool_result(record)

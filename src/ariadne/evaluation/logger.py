@@ -42,6 +42,7 @@ FIELDS = [
     "prompt_tokens",
     "completion_tokens",
     "cost_usd",
+    "attempts",               # tries needed (>1 = infrastructure failure was retried)
     "error",
 ]
 

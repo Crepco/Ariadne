@@ -79,6 +79,32 @@ def _pct(x: float) -> str:
     return f"{x * 100:.1f}%"
 
 
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for a proportion.
+
+    Wilson rather than the normal approximation because this benchmark's numbers
+    are exactly where the normal approximation breaks: small n, and rates that
+    sit at 0% (hallucination) or 100% (a model's correctness). The normal
+    interval collapses to zero width at those extremes — claiming certainty from
+    11 runs — while Wilson stays honest.
+    """
+    if n <= 0:
+        return (float("nan"), float("nan"))
+    phat = successes / n
+    denominator = 1 + z**2 / n
+    centre = (phat + z**2 / (2 * n)) / denominator
+    margin = z * np.sqrt(phat * (1 - phat) / n + z**2 / (4 * n**2)) / denominator
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def _pct_ci(successes: int, n: int) -> str:
+    """``83.8% [69.5–92.2]`` — the rate with its 95% interval."""
+    if n <= 0:
+        return "n/a"
+    low, high = wilson_interval(successes, n)
+    return f"{_pct(successes / n)} [{low * 100:.1f}–{high * 100:.1f}]"
+
+
 def classify(df: pd.DataFrame) -> pd.Series:
     """Assign each run to exactly one outcome bucket (see ``_MODES``)."""
     return pd.Series(
@@ -117,6 +143,11 @@ def _overall(df: pd.DataFrame) -> dict:
         "correctness": df["correct"].mean() if total else 0.0,
         "path_valid": df["path_valid"].mean() if total else 0.0,
         "hallucination": df["hallucinated_edge"].mean() if total else 0.0,
+        # Success counts, so the caller can attach a confidence interval to each
+        # rate rather than presenting a point estimate from a handful of runs.
+        "n_correct": int(df["correct"].sum()),
+        "n_valid": int(df["path_valid"].sum()),
+        "n_hallucinated": int(df["hallucinated_edge"].sum()),
         "incomplete": int(df["incomplete"].sum()),
         "avg_tool_calls_correct": solved["tool_calls"].mean() if len(solved) else float("nan"),
         "avg_time": df["time_seconds"].mean() if total else float("nan"),
@@ -160,6 +191,7 @@ def _by_model(df: pd.DataFrame) -> pd.DataFrame:
     out = df.groupby("model").agg(
         runs=("correct", "size"),
         correctness=("correct", "mean"),
+        n_correct=("correct", "sum"),
         hallucination=("hallucinated_edge", "mean"),
         beats_bloodhound=("beats_bloodhound", "sum"),
         avg_tool_calls=("tool_calls", "mean"),
@@ -187,11 +219,11 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     print("=" * 52)
     if excluded:
         print(f"(excluded {excluded} run(s) with infrastructure errors)")
-    print(f"Total runs             : {o['runs']}")
-    print(f"Correctness            : {_pct(o['correctness'])}  "
+    print(f"Total runs             : {o['runs']}   (rates shown with 95% Wilson intervals)")
+    print(f"Correctness            : {_pct_ci(o['n_correct'], o['runs'])}  "
           f"(right answer; incl. correctly declaring NO PATH)")
-    print(f"Valid-path rate        : {_pct(o['path_valid'])}")
-    print(f"Hallucination rate     : {_pct(o['hallucination'])}")
+    print(f"Valid-path rate        : {_pct_ci(o['n_valid'], o['runs'])}")
+    print(f"Hallucination rate     : {_pct_ci(o['n_hallucinated'], o['runs'])}")
     print(f"Incomplete (no answer) : {o['incomplete']}")
     print(f"Avg tool calls (solved): {o['avg_tool_calls_correct']:.2f}")
     print(f"Avg runtime (s)        : {o['avg_time']:.2f}")
@@ -201,7 +233,7 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     print(f"Beats BloodHound       : {o['beats_bloodhound']} run(s) found a real path the canonical "
           f"query misses  (of {o['advanced_required']} advanced-required case(s))")
     if o["advanced_required"]:
-        print(f"Advanced-case recall   : {_pct(o['advanced_recall'])}  "
+        print(f"Advanced-case recall   : {_pct_ci(o['advanced_solved'], o['advanced_required'])}  "
               f"({o['advanced_solved']}/{o['advanced_required']} inference-only cases solved)")
     if not np.isnan(o["avg_cost"]):
         print(f"Avg tokens/run         : {o['avg_tokens']:.0f}")
@@ -218,11 +250,12 @@ def compute_metrics(path: Path = LOG_FILE) -> pd.DataFrame | None:
     bm = _by_model(df)
     if not bm.empty:
         print("\nBy model:")
-        print(f"  {'model':<28}  {'runs':>4}  {'correct':>8}  {'halluc':>7}  {'beatsBH':>7}  "
+        print(f"  {'model':<28}  {'runs':>4}  {'correct (95% CI)':>20}  {'halluc':>7}  {'beatsBH':>7}  "
               f"{'tools':>6}  {'time(s)':>7}  {'$/run':>8}")
         for _, r in bm.iterrows():
             cost = f"${r['avg_cost']:.4f}" if not np.isnan(r["avg_cost"]) else "  n/a"
-            print(f"  {str(r['model']):<28}  {int(r['runs']):>4}  {_pct(r['correctness']):>8}  "
+            print(f"  {str(r['model']):<28}  {int(r['runs']):>4}  "
+                  f"{_pct_ci(int(r['n_correct']), int(r['runs'])):>20}  "
                   f"{_pct(r['hallucination']):>7}  {int(r['beats_bloodhound']):>7}  "
                   f"{r['avg_tool_calls']:>6.1f}  {r['avg_time']:>7.2f}  {cost:>8}")
 
@@ -247,18 +280,25 @@ def metrics_markdown(path: Path = LOG_FILE) -> str:
         return "_All logged runs failed for infrastructure reasons._\n"
 
     o = _overall(df)
+    excluded = len(raw) - len(df)
     lines = [
         "### Overall",
         "",
+        "_Rates carry 95% Wilson score intervals. With samples this small, the interval "
+        "is the result — a point estimate of 100% from 11 runs is not a 100% success rate._",
+        "",
         "| Metric | Value |",
         "| --- | --- |",
-        f"| Runs | {o['runs']} |",
-        f"| Correctness | {_pct(o['correctness'])} |",
-        f"| Valid-path rate | {_pct(o['path_valid'])} |",
-        f"| Hallucination rate | {_pct(o['hallucination'])} |",
+        f"| Runs scored | {o['runs']}"
+        + (f" (of {len(raw)} attempted; {excluded} dropped to infrastructure errors)" if excluded else "")
+        + " |",
+        f"| Correctness | {_pct_ci(o['n_correct'], o['runs'])} |",
+        f"| Valid-path rate | {_pct_ci(o['n_valid'], o['runs'])} |",
+        f"| Hallucination rate | {_pct_ci(o['n_hallucinated'], o['runs'])} |",
         f"| Optimal of paths found | {_pct(o['optimal_of_found'])} ({o['found']} found) |",
         f"| Beats BloodHound | {o['beats_bloodhound']} of {o['advanced_required']} advanced-required |",
-        f"| Advanced-case recall | {_pct(o['advanced_recall'])} ({o['advanced_solved']}/{o['advanced_required']}) |",
+        f"| Advanced-case recall | {_pct_ci(o['advanced_solved'], o['advanced_required'])} "
+        f"({o['advanced_solved']}/{o['advanced_required']}) |",
         f"| Avg tool calls (solved) | {o['avg_tool_calls_correct']:.2f} |",
         f"| Avg runtime (s) | {o['avg_time']:.2f} |",
         f"| Agent misses (of truly reachable) | {o['agent_miss']}/{o['reachable']} |",
@@ -284,13 +324,14 @@ def metrics_markdown(path: Path = LOG_FILE) -> str:
             "",
             "### By model",
             "",
-            "| Model | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) | Avg cost |",
+            "| Model | Runs | Correctness (95% CI) | Hallucination | Beats BH | Avg tool calls | Avg time (s) | Avg cost |",
             "| :-- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for _, r in bm.iterrows():
             cost = f"${r['avg_cost']:.4f}" if not np.isnan(r["avg_cost"]) else "n/a"
             lines.append(
-                f"| {r['model']} | {int(r['runs'])} | {_pct(r['correctness'])} | "
+                f"| {r['model']} | {int(r['runs'])} | "
+                f"{_pct_ci(int(r['n_correct']), int(r['runs']))} | "
                 f"{_pct(r['hallucination'])} | {int(r['beats_bloodhound'])} | "
                 f"{r['avg_tool_calls']:.1f} | {r['avg_time']:.2f} | {cost} |"
             )

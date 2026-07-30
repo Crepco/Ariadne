@@ -24,6 +24,7 @@ from typing import Any, Iterable
 from neo4j import Driver, GraphDatabase
 
 from .config import Neo4jConfig, load_neo4j_config
+from .schema import BASE_LABEL, BASE_ID_INDEX, NODE_LABELS
 
 # Process-wide cached driver, keyed by connection identity so a change of
 # credentials (e.g. in tests) transparently rebuilds it.
@@ -100,12 +101,98 @@ def run_read(
     ``database`` defaults to the configured ``NEO4J_DATABASE`` so callers that
     don't care (e.g. the agent tools) still hit the right database on Aura,
     where the database name is not ``neo4j``.
+
+    The query runs in an explicit **READ** transaction (``execute_read``), so the
+    *server* rejects any write clause. That matters because the chat assistant
+    feeds LLM-authored Cypher through here: its keyword blocklist is a nicety for
+    error messages, but this is the actual boundary. A plain ``session.run`` uses
+    WRITE access mode and would happily execute ``MATCH (n) SET n.x = 1``.
     """
     if database is None:
         database = load_neo4j_config().database
+
+    def _work(tx):
+        return [record.data() for record in tx.run(query, **params)]
+
     with driver.session(database=database) as session:
-        result = session.run(query, **params)
-        return [record.data() for record in result]
+        return session.execute_read(_work)
+
+
+# --------------------------------------------------------------------------
+# Schema setup + node upsert — shared by the generator and the ingest path
+# --------------------------------------------------------------------------
+# Derived from a node's name at write time so lookups never have to wrap the
+# stored value in toUpper()/split(), which would rule out any index and force a
+# scan of every node.
+#   name_upper  the full name, upper-cased  (USER0001@ARIADNE.LOCAL)
+#   short_name  the leading label           (USER0001)
+_DERIVED_NAME_PROPS = (
+    "n.name_upper = toUpper(coalesce(row.props.name, '')), "
+    "n.short_name = split(split(toUpper(coalesce(row.props.name, '')), '@')[0], '.')[0]"
+)
+
+
+def node_upsert_query(label: str) -> str:
+    """The ``UNWIND $rows``-shaped upsert for one node label.
+
+    Every node also gets the shared :data:`~ariadne.schema.BASE_LABEL`, because a
+    Neo4j property index is only usable when the pattern names a label — and our
+    lookups are by object id, which is type-agnostic.
+    """
+    return (
+        f"UNWIND $rows AS row MERGE (n:{label} {{objectid: row.objectid}}) "
+        f"SET n:{BASE_LABEL}, n += row.props, {_DERIVED_NAME_PROPS}"
+    )
+
+
+def ensure_indexes(driver: Driver, database: str | None = None) -> None:
+    """Create the constraints and indexes every query path depends on."""
+    if database is None:
+        database = load_neo4j_config().database
+    statements = [
+        # Uniqueness constraint per label doubles as an objectid index.
+        *(f"CREATE CONSTRAINT {label.lower()}_objectid IF NOT EXISTS "
+          f"FOR (n:{label}) REQUIRE n.objectid IS UNIQUE" for label in NODE_LABELS),
+        # The one that matters for the agent's hot path: id lookups by :Base.
+        f"CREATE INDEX {BASE_ID_INDEX} IF NOT EXISTS FOR (n:{BASE_LABEL}) ON (n.objectid)",
+        # Name lookups used by search_node and verify_path.
+        f"CREATE INDEX base_name_upper IF NOT EXISTS FOR (n:{BASE_LABEL}) ON (n.name_upper)",
+        f"CREATE INDEX base_short_name IF NOT EXISTS FOR (n:{BASE_LABEL}) ON (n.short_name)",
+    ]
+    with driver.session(database=database) as session:
+        for statement in statements:
+            session.run(statement).consume()
+
+
+def require_base_label(driver: Driver, database: str | None = None) -> None:
+    """Fail loudly if the graph predates the shared ``:Base`` label.
+
+    Every lookup is scoped to ``:Base`` so it can use an index. On a graph
+    written before that label existed those queries match nothing — which would
+    surface as an agent that mysteriously can't find any node, or an audit
+    reporting zero findings on a graph full of them. A silently empty result is
+    the worst possible failure here, so check once and say exactly what to run.
+    """
+    if database is None:
+        database = load_neo4j_config().database
+    rows = run_read(
+        driver,
+        f"MATCH (n) WITH count(n) AS total "
+        f"OPTIONAL MATCH (b:{BASE_LABEL}) RETURN total, count(b) AS labelled",
+        database=database,
+    )
+    if not rows:
+        return
+    total, labelled = rows[0]["total"], rows[0]["labelled"]
+    if total > 0 and labelled == 0:
+        raise RuntimeError(
+            f"This graph has {total} nodes but none carry the ':{BASE_LABEL}' label, so every "
+            "lookup would return nothing.\n"
+            "It was written by an older version of Ariadne. Backfill it once (idempotent, "
+            "no data loss):\n"
+            "    python data/generator/migrate_base_label.py\n"
+            "…or rebuild it: python data/generator/generate.py --wipe"
+        )
 
 
 def run_write_batches(

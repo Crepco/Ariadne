@@ -2,6 +2,35 @@
 
 from __future__ import annotations
 
+from ariadne.evaluation.metrics import wilson_interval
+
+
+# --- Wilson score intervals -------------------------------------------------
+def test_wilson_interval_does_not_collapse_at_the_extremes():
+    # The whole reason for Wilson over the normal approximation: 11/11 correct is
+    # not evidence of a 100% success rate, and 0/37 hallucinations is not proof
+    # the rate is exactly zero. The normal interval has zero width at both ends.
+    low, high = wilson_interval(11, 11)
+    assert high == 1.0
+    assert 0.6 < low < 0.99          # a real lower bound, not 1.0
+
+    low, high = wilson_interval(0, 37)
+    assert low == 0.0
+    assert 0.0 < high < 0.15         # a real upper bound, not 0.0
+
+
+def test_wilson_interval_brackets_the_point_estimate_and_tightens_with_n():
+    low, high = wilson_interval(30, 37)
+    assert low < 30 / 37 < high
+
+    narrow = wilson_interval(300, 370)
+    assert (narrow[1] - narrow[0]) < (high - low)   # more runs, tighter interval
+
+
+def test_wilson_interval_of_an_empty_sample_is_undefined():
+    low, high = wilson_interval(0, 0)
+    assert low != low and high != high              # NaN, not a spurious 0–1
+
 from ariadne.evaluation import metrics
 
 _HEADER = (

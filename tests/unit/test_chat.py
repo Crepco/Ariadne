@@ -39,6 +39,20 @@ def test_is_read_only():
     assert chat.is_read_only("MERGE (n:X) RETURN n") is False
 
 
+def test_is_read_only_catches_write_clauses_across_a_line_break():
+    # The old blocklist matched the literal string "SET " (with a trailing
+    # space), so a newline after the keyword walked straight past it.
+    assert chat.is_read_only("MATCH (n)\nSET\nn.pwned = true\nRETURN n") is False
+    assert chat.is_read_only("MATCH (n)\tDELETE\tn") is False
+    assert chat.is_read_only("CALL {\n MATCH (n) DETACH DELETE n\n}") is False
+
+
+def test_is_read_only_does_not_flag_names_that_merely_contain_a_keyword():
+    # Substring matching would reject these legitimate reads.
+    assert chat.is_read_only("MATCH (n) WHERE n.name = 'CREATED_BY' RETURN n") is True
+    assert chat.is_read_only("MATCH (n) RETURN n.dropbox_id") is True
+
+
 def test_parse_intent_variants():
     assert chat.parse_intent('{"intent":"check","args":{"name":"nested_da"}}') == {
         "intent": "check", "args": {"name": "nested_da"}}

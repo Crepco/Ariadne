@@ -96,6 +96,65 @@ def test_no_path_finish_skips_verification(monkeypatch):
     assert calls["verify"] == 0
 
 
+def test_dict_input_is_spread_over_a_multi_argument_tool(monkeypatch):
+    # Regression guard: the dispatcher used to pass a single positional argument
+    # to every tool, so check_path_exists (which needs two) raised TypeError on
+    # every call and was silently dead while still advertised in the prompt.
+    seen = {}
+
+    def check_path_exists(start_objectid, goal_objectid, database=None):
+        seen.update(start=start_objectid, goal=goal_objectid)
+        return {"exists": True}
+
+    replies = iter([
+        LLMResult('{"action":"check_path_exists",'
+                  '"input":{"start_objectid":"S-1","goal_objectid":"S-2"}}', 1, 1, 0.0),
+        LLMResult('{"action":"finish","answer":"NO PATH FOUND","path":[]}', 1, 1, 0.0),
+    ])
+    monkeypatch.setattr(loop, "chat", lambda history: next(replies))
+    monkeypatch.setattr(loop, "TOOLS", {"check_path_exists": check_path_exists})
+
+    res = loop.run_agent("A", max_steps=5, verbose=False)
+
+    assert seen == {"start": "S-1", "goal": "S-2"}
+    assert res.tool_calls == 1
+
+
+def test_multi_argument_tool_called_with_a_bare_string_explains_itself(monkeypatch):
+    # The observation has to teach the model the right shape, otherwise it just
+    # abandons the tool after one opaque failure.
+    observations = []
+
+    def check_path_exists(start_objectid, goal_objectid, database=None):
+        return {"exists": True}
+
+    replies = iter([
+        LLMResult('{"action":"check_path_exists","input":"S-1"}', 1, 1, 0.0),
+        LLMResult('{"action":"finish","answer":"NO PATH FOUND","path":[]}', 1, 1, 0.0),
+    ])
+    monkeypatch.setattr(loop, "chat", lambda history: next(replies))
+    monkeypatch.setattr(loop, "TOOLS", {"check_path_exists": check_path_exists})
+
+    loop.run_agent("A", max_steps=5, verbose=False,
+                   on_step=lambda s: observations.append(s.get("observation")))
+
+    message = str(observations[0])
+    assert "start_objectid" in message and "goal_objectid" in message
+    assert '"input"' in message           # shows the object form to use
+
+
+def test_single_argument_tools_still_take_a_bare_value(monkeypatch):
+    replies = iter([
+        LLMResult('{"action":"search_node","input":"USER0001"}', 1, 1, 0.0),
+        LLMResult('{"action":"finish","answer":"NO PATH FOUND","path":[]}', 1, 1, 0.0),
+    ])
+    monkeypatch.setattr(loop, "chat", lambda history: next(replies))
+    monkeypatch.setattr(loop, "TOOLS", {"search_node": lambda name, database=None: [name]})
+
+    res = loop.run_agent("A", max_steps=5, verbose=False)
+    assert res.tool_calls == 1
+
+
 def test_run_agent_reports_unknown_tool_without_counting_a_call(monkeypatch):
     replies = iter([
         LLMResult('{"action":"bogus_tool","input":"x"}', 1, 1, 0.0),

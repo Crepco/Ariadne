@@ -19,16 +19,30 @@ Run it::
 from __future__ import annotations
 
 import json
+import re
 
 from ariadne.agent.llm import chat
 from ariadne.checks import CHECKS, run_check
 from ariadne.db import run_read
 from ariadne.report import explain_path, rank_paths
 
-_WRITE_KEYWORDS = (
-    "CREATE", "MERGE", "DELETE", "DETACH", "SET ", "REMOVE", "DROP",
-    "LOAD CSV", "FOREACH", "CALL {", "CALL{",
+# Write clauses, as whole words. Matching on whitespace-delimited words rather
+# than substrings avoids both directions of error the old list had: `"SET "`
+# (with a literal trailing space) missed `SET\n`, while a bare `"CREATE"` would
+# flag a node named `CREATED_BY`.
+#
+# This is a *pre-filter*, not the security boundary — it exists to give a clear
+# refusal message. The actual guarantee is that `db.run_read` runs inside an
+# explicit READ transaction, so Neo4j itself rejects a write whatever slips past
+# this regex.
+_WRITE_CLAUSES = (
+    "CREATE", "MERGE", "DELETE", "DETACH", "SET", "REMOVE", "DROP",
+    "FOREACH", "LOAD",
 )
+_WRITE_RE = re.compile(r"\b(" + "|".join(_WRITE_CLAUSES) + r")\b", re.IGNORECASE)
+# A CALL subquery can hide writes; a plain `CALL db.labels()` is a legitimate
+# read, so only the subquery form is flagged.
+_SUBQUERY_RE = re.compile(r"\bCALL\s*\{", re.IGNORECASE)
 
 _ROUTER_SYSTEM = """You route a security analyst's question about an Active Directory
 graph to ONE grounded operation. Reply with a single JSON object, nothing else:
@@ -53,9 +67,14 @@ Never invent findings or paths; if unsure, use intent "help". Output ONLY the JS
 # Pure helpers (unit-tested without a database or network)
 # ---------------------------------------------------------------------------
 def is_read_only(query: str) -> bool:
-    """True if a Cypher query has no write clause (safe to run via run_read)."""
-    up = f" {query.upper()} "
-    return not any(kw in up for kw in _WRITE_KEYWORDS)
+    """True if a Cypher query contains no write clause.
+
+    A fast pre-filter for a friendly refusal message. ``db.run_read`` enforces
+    read-only access server-side regardless, so a false negative here is a worse
+    error message, not a write.
+    """
+    text = query or ""
+    return not (_WRITE_RE.search(text) or _SUBQUERY_RE.search(text))
 
 
 def parse_intent(text: str) -> dict:

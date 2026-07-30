@@ -20,17 +20,24 @@ Two things are measured:
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 
 from ariadne.config import load_neo4j_config
-from ariadne.db import get_driver, run_read
+from ariadne.db import get_driver, require_base_label, run_read
 from ariadne.inference import INFERENCE_RULES, classify_hop, true_reachable
-from ariadne.schema import CANONICAL_EDGES, GOAL_GROUP, INFERENCE_PROPERTIES
-from ariadne.tools import check_path_exists
+from ariadne.resolve import NameIndex
+from ariadne.schema import BASE_LABEL, CANONICAL_EDGES, GOAL_GROUP, INFERENCE_PROPERTIES
+from ariadne.verify import verify_walk
 
 _ARROW = re.compile(r"->|=>|→")
 # Tokens that are edge/rule labels, not nodes, so path parsing drops them.
 _EDGE_SET = {e.upper() for e in CANONICAL_EDGES} | {r.upper() for r in INFERENCE_RULES}
+
+# Memo for ScoringContext.cached(); see that method for the invalidation rule.
+_CACHE: "ScoringContext | None" = None
+_CACHE_KEY: tuple | None = None
+_CACHE_LOCK = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -70,61 +77,91 @@ class ScoringContext:
     canonical_adj: dict = field(default_factory=dict)  # oid -> [canonical successors]
     edge_types: dict = field(default_factory=dict)     # (a,b) -> canonical edge type
     canonical_filter: str = ""                          # canonical edges only (BloodHound)
+    index: NameIndex | None = None                      # shared name resolution
 
     @classmethod
-    def load(cls) -> "ScoringContext":
+    def load(cls, *, full: bool = True) -> "ScoringContext":
+        """Load the whole graph into memory for scoring.
+
+        ``full=False`` skips the canonical-edge adjacency build, for callers that
+        only need name resolution and properties (the chat assistant, most web
+        endpoints) — it halves the work and avoids holding every edge in memory.
+        The reachability oracles (``baseline``) need ``full=True``.
+        """
         database = load_neo4j_config().database
         driver = get_driver()
+        require_base_label(driver, database)
 
-        name_to_oid: dict[str, str] = {}
-        names: dict[str, str] = {}
-        oids: set[str] = set()
-        props: dict[str, dict] = {}
         prop_cols = ", ".join(f"n.{p} AS {p}" for p in INFERENCE_PROPERTIES)
-        for row in run_read(
+        index = NameIndex.from_rows(run_read(
             driver,
-            f"MATCH (n) RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
+            f"MATCH (n:{BASE_LABEL}) RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
             database=database,
-        ):
-            oid, name = row["oid"], row["name"]
-            if not oid:
-                continue
-            oids.add(oid)
-            props[oid] = {p: row.get(p) for p in INFERENCE_PROPERTIES}
-            if name:
-                names[oid] = name
-                name_to_oid[name.upper()] = oid
-                # short name too: users are USER@DOMAIN, computers are HOST.DOMAIN,
-                # so split on either separator.
-                name_to_oid[re.split(r"[@.]", name)[0].upper()] = oid
+        ))
 
+        # The name scan finds DOMAIN ADMINS@<domain> on its own, but an explicit
+        # label-scoped lookup is authoritative (and covers a graph whose goal
+        # group is named unusually).
         goal_rows = run_read(
             driver,
-            "MATCH (g:Group) WHERE g.name STARTS WITH $p RETURN g.objectid AS oid",
+            f"MATCH (g:{BASE_LABEL}:Group) WHERE g.name STARTS WITH $p RETURN g.objectid AS oid",
             database=database,
             p=f"{GOAL_GROUP}@",
         )
-        goal_oid = goal_rows[0]["oid"] if goal_rows else None
+        if goal_rows:
+            index.goal_oid = goal_rows[0]["oid"]
 
         # Canonical edges: build adjacency + (a,b)->type once, and the present-type
         # filter for the BloodHound Cypher baseline.
         canonical_adj: dict[str, list[str]] = {}
         edge_types: dict[tuple[str, str], str] = {}
         present: set[str] = set()
-        for row in run_read(
-            driver,
-            "MATCH (a)-[r]->(b) WHERE type(r) IN $canon "
-            "RETURN a.objectid AS a, type(r) AS t, b.objectid AS b",
-            database=database,
-            canon=list(CANONICAL_EDGES),
-        ):
-            a, b, t = row["a"], row["b"], row["t"]
-            canonical_adj.setdefault(a, []).append(b)
-            edge_types[(a, b)] = t
-            present.add(t)
+        if full:
+            for row in run_read(
+                driver,
+                f"MATCH (a:{BASE_LABEL})-[r]->(b:{BASE_LABEL}) WHERE type(r) IN $canon "
+                "RETURN a.objectid AS a, type(r) AS t, b.objectid AS b",
+                database=database,
+                canon=list(CANONICAL_EDGES),
+            ):
+                a, b, t = row["a"], row["b"], row["t"]
+                canonical_adj.setdefault(a, []).append(b)
+                edge_types[(a, b)] = t
+                present.add(t)
         canonical_filter = "|".join(e for e in CANONICAL_EDGES if e in present)
-        return cls(driver, database, goal_oid, name_to_oid, names, oids, props,
-                   canonical_adj, edge_types, canonical_filter)
+        return cls(driver, database, index.goal_oid, index.name_to_oid, index.names,
+                   index.oids, index.props, canonical_adj, edge_types, canonical_filter,
+                   index)
+
+    @classmethod
+    def cached(cls, *, full: bool = True) -> "ScoringContext":
+        """A memoised context, rebuilt only when the graph changes.
+
+        ``load()`` reads every node (and every canonical edge) — fine once per
+        benchmark graph, wasteful when a long-lived process calls it repeatedly.
+        The visualiser did exactly that: one full graph load per HTTP request.
+
+        The cache key is the connection plus a cheap fingerprint of the graph
+        (node and relationship counts), so regenerating or re-ingesting a graph
+        invalidates it automatically — a stale context would silently score
+        against the wrong graph, which is worse than a slow one.
+        """
+        global _CACHE, _CACHE_KEY
+        database = load_neo4j_config().database
+        driver = get_driver()
+        rows = run_read(
+            driver,
+            "MATCH (n) WITH count(n) AS nodes "
+            "MATCH ()-[r]->() RETURN nodes, count(r) AS edges",
+            database=database,
+        )
+        fingerprint = (rows[0]["nodes"], rows[0]["edges"]) if rows else (0, 0)
+        key = (database, fingerprint, full)
+        with _CACHE_LOCK:
+            if _CACHE is None or _CACHE_KEY != key:
+                _CACHE = cls.load(full=full)
+                _CACHE_KEY = key
+            return _CACHE
 
     def close(self) -> None:
         # The driver is the process-wide shared instance (ariadne.db), so we do
@@ -134,10 +171,19 @@ class ScoringContext:
 
     # -- resolution / graph checks --
     def resolve(self, token: str):
+        if self.index is not None:
+            return self.index.resolve(token)
         t = (token or "").strip()
         if t in self.oids:
             return t
         return self.name_to_oid.get(t.upper())
+
+    def resolve_all(self, tokens):
+        """``(oids, unknown, ambiguous)`` for a whole path — see NameIndex."""
+        if self.index is not None:
+            return self.index.resolve_all(tokens)
+        resolved = [self.resolve(t) for t in tokens]
+        return resolved, [t for t, o in zip(tokens, resolved) if o is None], []
 
     def hop_kind(self, a_oid: str, b_oid: str):
         """Classify the step a->b: ('edge', type) for a real canonical edge,
@@ -158,7 +204,7 @@ class ScoringContext:
         if not self.goal_oid or not self.canonical_filter:
             return {"reachable": False, "hops": -1}
         q = (
-            f"MATCH (s {{objectid:$s}}), (g {{objectid:$g}}) "
+            f"MATCH (s:{BASE_LABEL} {{objectid:$s}}), (g:{BASE_LABEL} {{objectid:$g}}) "
             f"OPTIONAL MATCH p = shortestPath((s)-[:{self.canonical_filter}*1..15]->(g)) "
             f"RETURN p IS NOT NULL AS reachable, "
             f"CASE WHEN p IS NULL THEN -1 ELSE length(p) END AS hops"
@@ -175,7 +221,7 @@ class ScoringContext:
         if not self.goal_oid or not self.canonical_filter or not start_oid:
             return []
         q = (
-            f"MATCH (s {{objectid:$s}}), (g {{objectid:$g}}) "
+            f"MATCH (s:{BASE_LABEL} {{objectid:$s}}), (g:{BASE_LABEL} {{objectid:$g}}) "
             f"OPTIONAL MATCH p = shortestPath((s)-[:{self.canonical_filter}*1..15]->(g)) "
             f"RETURN CASE WHEN p IS NULL THEN [] ELSE [n IN nodes(p) | n.objectid] END AS oids"
         )
@@ -187,38 +233,30 @@ class ScoringContext:
 # Verify a proposed path hop-by-hop
 # --------------------------------------------------------------------------
 def verify_path(ctx: ScoringContext, tokens: list[str], expected_start_oid: str | None = None) -> dict:
-    resolved = [ctx.resolve(t) for t in tokens]
-    unresolved = [t for t, o in zip(tokens, resolved) if o is None]
+    """Verify a proposed path against the graph.
 
-    hop_edges = []
-    derived_steps = 0
-    connected = len(tokens) >= 2 and not unresolved
-    if connected:
-        for a, b in zip(resolved, resolved[1:]):
-            kind = ctx.hop_kind(a, b)               # ('edge',t) | ('inferred',rule) | None
-            label = kind[1] if kind else None
-            inferred = bool(kind) and kind[0] == "inferred"
-            hop_edges.append({"from": a, "to": b, "edge": label, "inferred": inferred})
-            if kind is None:
-                connected = False
-            elif inferred:
-                derived_steps += 1
+    Delegates the walk to ``ariadne.verify.verify_walk`` — the *same* code the
+    agent's ``verify_path`` tool runs — so the tool's verdict and the score can't
+    disagree.
+    """
+    # ScoringContext reports ambiguous short names; the lightweight fakes used in
+    # tests only expose ``resolve``, so fall back to plain resolution for those.
+    if hasattr(ctx, "resolve_all"):
+        resolved, unknown, ambiguous = ctx.resolve_all(tokens)
+    else:
+        resolved = [ctx.resolve(t) for t in tokens]
+        unknown = [t for t, o in zip(tokens, resolved) if o is None]
+        ambiguous = []
 
-    reaches_goal = bool(resolved) and resolved[-1] == ctx.goal_oid
-    starts_ok = expected_start_oid is None or (bool(resolved) and resolved[0] == expected_start_oid)
-    valid = connected and reaches_goal and len(tokens) >= 2 and not unresolved
-    hallucinated = bool(unresolved) or any(h["edge"] is None for h in hop_edges)
-    return {
-        "valid": valid,
-        "hallucinated": hallucinated,
-        "hops": (len(tokens) - 1) if len(tokens) >= 2 else -1,
-        "reaches_goal": reaches_goal,
-        "starts_ok": starts_ok,
-        "unresolved": unresolved,
-        "hop_edges": hop_edges,
-        "derived_steps": derived_steps,        # inferred (non-edge) hops used
-        "uses_derived": derived_steps > 0,
-    }
+    return verify_walk(
+        tokens,
+        resolved,
+        hop_kind=ctx.hop_kind,
+        goal_oid=ctx.goal_oid,
+        unknown=unknown,
+        ambiguous=ambiguous,
+        expected_start_oid=expected_start_oid,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -300,11 +338,15 @@ def score_agent_result(ctx: ScoringContext, result, start_oid: str) -> dict:
 # Backward-compat: the original simple reachability score
 # --------------------------------------------------------------------------
 def path_is_valid(start_oid: str, goal_oid: str) -> bool:
+    from ariadne.tools import check_path_exists   # local: ariadne.tools imports us
+
     result = check_path_exists(start_oid, goal_oid)
     return bool(result and result["exists"])
 
 
 def score_run(start_oid: str, goal_oid: str) -> dict:
+    from ariadne.tools import check_path_exists   # local: ariadne.tools imports us
+
     result = check_path_exists(start_oid, goal_oid)
     if result is None:
         return {"path_valid": False, "hallucinated_edge": True, "hops": -1, "nodes": [], "edges": []}
