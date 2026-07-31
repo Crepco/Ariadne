@@ -231,6 +231,17 @@ def check_path_exists(
 # --------------------------------------------------------------------------
 # verify_path — self-check a proposed path before finishing
 # --------------------------------------------------------------------------
+def _prop_cols(var: str) -> str:
+    """``n.hasspn AS hasspn, …`` for a given Cypher variable.
+
+    Takes the variable explicitly because these columns are selected under two
+    different aliases (the token match binds ``n``, the goal lookup binds ``g``);
+    hard-coding ``n.`` made the goal query a syntax error that only fired when a
+    path failed to name Domain Admins.
+    """
+    return ", ".join(f"{var}.{p} AS {p}" for p in INFERENCE_PROPERTIES)
+
+
 def _index_for_tokens(driver, database, tokens: list[str]) -> NameIndex:
     """Build a :class:`NameIndex` covering just the nodes a path mentions.
 
@@ -239,7 +250,6 @@ def _index_for_tokens(driver, database, tokens: list[str]) -> NameIndex:
     the candidates for its tokens (by object id, full name, or short name) plus
     the goal node — turning an O(V) scan per call into an O(path) lookup.
     """
-    prop_cols = ", ".join(f"n.{p} AS {p}" for p in INFERENCE_PROPERTIES)
     wanted = [t.strip() for t in tokens if t and t.strip()]
     uppers = sorted({t.upper() for t in wanted} | {short_name(t) for t in wanted})
 
@@ -251,7 +261,7 @@ def _index_for_tokens(driver, database, tokens: list[str]) -> NameIndex:
         f"MATCH (n:{BASE_LABEL}) "
         "WHERE n.objectid IN $oids OR n.name_upper IN $uppers OR n.short_name IN $uppers "
         f"   OR {_NAME_UPPER} IN $uppers OR {_SHORT_NAME} IN $uppers "
-        f"RETURN n.objectid AS oid, n.name AS name, {prop_cols}",
+        f"RETURN n.objectid AS oid, n.name AS name, {_prop_cols('n')}",
         database=database,
         oids=wanted,
         uppers=uppers,
@@ -264,7 +274,7 @@ def _index_for_tokens(driver, database, tokens: list[str]) -> NameIndex:
         goal_rows = run_read(
             driver,
             f"MATCH (g:{BASE_LABEL}:Group) WHERE g.name STARTS WITH $p "
-            f"RETURN g.objectid AS oid, g.name AS name, {prop_cols} LIMIT 1",
+            f"RETURN g.objectid AS oid, g.name AS name, {_prop_cols('g')} LIMIT 1",
             database=database,
             p=f"{GOAL_GROUP}@",
         )

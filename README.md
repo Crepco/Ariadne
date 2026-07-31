@@ -80,10 +80,11 @@ And you can **watch it happen**: `ariadne-web` opens a local visualiser where th
 
 ## Quickstart
 
-**Prerequisites:** Python 3.11+, a Neo4j database (a free [Neo4j Aura](https://console.neo4j.io) instance, or local Neo4j — see [`infra/neo4j/`](infra/neo4j/)), and an LLM API key ([OpenRouter](https://openrouter.ai) by default).
+**Prerequisites:** Python 3.11+, a Neo4j database (a free [Neo4j Aura](https://console.neo4j.io) instance, or local Neo4j — see [`infra/neo4j/`](infra/neo4j/)), and an LLM API key — [OpenRouter](https://openrouter.ai), [Anthropic](https://console.anthropic.com), or Gemini. The backend is picked from whichever key is present; override with `LLM_PROVIDER`.
 
 ```bash
-# 1. Install (editable). Extras: .[viz] plots, .[web] visualiser, .[gemini] Gemini backend.
+# 1. Install (editable). Extras: .[viz] plots, .[web] visualiser,
+#    .[anthropic] native Claude backend, .[gemini] Gemini backend.
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -e ".[viz,web]"
 

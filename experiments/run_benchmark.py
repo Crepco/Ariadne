@@ -132,6 +132,7 @@ def is_infrastructure_error(exc: Exception) -> bool:
     return any(marker in text for marker in (
         "402", "429", "rate limit", "timeout", "timed out", "connection",
         "temporarily unavailable", "service unavailable", "resource_exhausted",
+        "credit balance", "no api credit",   # Anthropic reports these as 400
     ))
 
 
@@ -262,6 +263,15 @@ def main() -> None:
     if args.temperature is not None:
         llm.set_temperature(args.temperature)
     print(f"   sampling temperature = {llm.active_temperature()}")
+
+    # Current Claude models reject a sampling temperature outright, so the
+    # backend drops it. Say so — otherwise a variance sweep runs to completion
+    # at temperature 0 and the near-identical trials look like real agreement.
+    if args.temperature:
+        deaf = [m for m in args.models if not llm.accepts_temperature(m)]
+        if deaf:
+            print(f"   WARNING: {', '.join(deaf)} do not accept a sampling temperature; "
+                  f"those runs are deterministic and --trials adds no variance.")
 
     # Either sweep synthetic sizes, or run once on an ingested BloodHound export.
     if args.source_export:

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from ariadne.agent import llm
 
 
@@ -160,6 +164,129 @@ def test_independent_clients_do_not_share_configuration():
     assert (a.model, a.temperature) == ("openai/gpt-4o-mini", 0.0)
     assert (b.model, b.temperature) == ("anthropic/claude-x", 0.7)
     assert llm.LLMClient(model="gemini-3.1-flash-lite").provider == "gemini"
+
+
+# --- Anthropic backend ------------------------------------------------------
+def test_provider_is_inferred_from_the_model_id():
+    # A bare claude-* id is the native Anthropic API; anthropic/claude-* is an
+    # OpenRouter slug for the same model and must NOT route natively.
+    assert llm._infer_provider("claude-opus-5") == "anthropic"
+    assert llm._infer_provider("anthropic/claude-opus-5") == "openrouter"
+    assert llm._infer_provider("openai/gpt-4o-mini") == "openrouter"
+    assert llm._infer_provider("gemini-3.1-flash-lite") == "gemini"
+
+
+def test_current_claude_models_reject_a_sampling_temperature():
+    # Sending temperature to these is a 400, so --temperature must be skipped
+    # rather than passed through — otherwise a variance sweep scores zero runs.
+    assert llm.accepts_temperature("claude-opus-5") is False
+    assert llm.accepts_temperature("claude-sonnet-5") is False
+    assert llm.accepts_temperature("claude-opus-4-6") is True
+    assert llm.accepts_temperature("openai/gpt-4o-mini") is True
+
+
+def test_unfilled_placeholder_key_is_not_treated_as_configured(monkeypatch):
+    # .env.example ships OPENROUTER_API_KEYS=sk-or-... — left as-is it would
+    # otherwise route every request to OpenRouter and 401.
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "sk-or-...")
+    assert llm._load_keys() == []
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "sk-or-real,sk-or-...")
+    assert llm._load_keys() == ["sk-or-real"]
+
+
+def test_system_prompt_is_split_out_and_turns_start_with_user():
+    system, turns = llm._split_system_blocks([
+        {"role": "system", "content": "SYS"},
+        {"role": "assistant", "content": "stray"},   # dropped: must start at user
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ])
+    assert system == "SYS"
+    assert turns == [{"role": "user", "content": "hello"},
+                     {"role": "assistant", "content": "hi"}]
+
+
+def test_anthropic_cost_uses_published_per_million_rates():
+    # Opus 5 is $5/MTok in, $25/MTok out.
+    assert llm._anthropic_cost("claude-opus-5", 1_000_000, 0) == pytest.approx(5.0)
+    assert llm._anthropic_cost("claude-opus-5", 0, 1_000_000) == pytest.approx(25.0)
+    # An unknown model records tokens without inventing a price.
+    assert llm._anthropic_cost("claude-future-9", 1_000_000, 1_000_000) == 0.0
+
+
+def test_anthropic_text_keeps_only_text_blocks():
+    blocks = [
+        SimpleNamespace(type="thinking", thinking="reasoning"),
+        SimpleNamespace(type="text", text='{"action": "finish"}'),
+    ]
+    assert llm._anthropic_text(blocks) == '{"action": "finish"}'
+
+
+def test_anthropic_refusal_is_raised_as_an_llm_error(monkeypatch):
+    # Ariadne's whole domain is AD attack paths, so a cyber-category refusal is
+    # a realistic outcome — it must surface as an error, not an empty answer
+    # that the scorer would record as the agent giving up.
+    class _Messages:
+        def create(self, **kw):
+            return SimpleNamespace(
+                stop_reason="refusal",
+                stop_details=SimpleNamespace(category="cyber"),
+                content=[], usage=SimpleNamespace(input_tokens=1, output_tokens=0),
+            )
+
+    monkeypatch.setattr(llm, "_anthropic_sdk",
+                        lambda: SimpleNamespace(beta=SimpleNamespace(messages=_Messages())))
+    with pytest.raises(llm.LLMError) as excinfo:
+        llm._anthropic([{"role": "user", "content": "x"}], "claude-opus-5", max_retries=1)
+    assert "cyber" in str(excinfo.value)
+
+
+def test_anthropic_request_shape(monkeypatch):
+    captured = {}
+
+    class _Messages:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text="ok")],
+                usage=SimpleNamespace(input_tokens=10, output_tokens=4),
+            )
+
+    monkeypatch.setattr(llm, "_anthropic_sdk",
+                        lambda: SimpleNamespace(beta=SimpleNamespace(messages=_Messages())))
+    res = llm._anthropic(
+        [{"role": "system", "content": "SYS"}, {"role": "user", "content": "hi"}],
+        "claude-opus-5", max_retries=1, temperature=0.7, max_tokens=8000,
+    )
+
+    assert res.text == "ok"
+    assert (res.prompt_tokens, res.completion_tokens) == (10, 4)
+    assert res.cost_usd == pytest.approx(10 / 1e6 * 5.0 + 4 / 1e6 * 25.0)
+    assert captured["system"] == "SYS"                  # system is its own field
+    assert captured["messages"] == [{"role": "user", "content": "hi"}]
+    assert "temperature" not in captured                # rejected by this model
+    assert captured["fallbacks"] == "default"           # cyber-refusal fallback
+    assert captured["output_config"]["effort"] == llm.ANTHROPIC_EFFORT
+
+
+def test_anthropic_sends_temperature_to_models_that_accept_it(monkeypatch):
+    captured = {}
+
+    class _Messages:
+        def create(self, **kw):
+            captured.update(kw)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text="ok")],
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+            )
+
+    monkeypatch.setattr(llm, "_anthropic_sdk",
+                        lambda: SimpleNamespace(beta=SimpleNamespace(messages=_Messages())))
+    llm._anthropic([{"role": "user", "content": "hi"}], "claude-opus-4-6",
+                   max_retries=1, temperature=0.7)
+    assert captured["temperature"] == 0.7
 
 
 def test_split_system_keeps_the_system_prompt_out_of_the_turns():

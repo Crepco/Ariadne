@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import re
+
+from ariadne.tools import tools as toolmod
 from ariadne.verify import as_tool_result, verify_walk
 
 # A -[edge]-> B -[inferred roast]-> SVC -[edge]-> DA
@@ -85,4 +88,60 @@ def test_tool_result_lists_each_hop_with_its_step_label():
     out = as_tool_result(_walk(["A", "B", "SVC", "DOMAIN ADMINS"], ["A", "B", "SVC", "DA"]))
     assert [h["step"] for h in out["hops"]] == ["GenericAll", "Kerberoast", "MemberOf"]
     assert all(h["valid"] for h in out["hops"])
+    assert out["derived_steps"] == 1
+
+
+# --- the Cypher verify_path issues ------------------------------------------
+def _captured_queries(monkeypatch, rows_for):
+    queries = []
+
+    def fake_run_read(driver, query, database=None, **params):
+        queries.append(query)
+        return rows_for(query)
+
+    monkeypatch.setattr(toolmod, "run_read", fake_run_read)
+    monkeypatch.setattr(toolmod, "get_driver", lambda: None)
+    return queries
+
+
+def _projections(query: str) -> list[tuple[str, str]]:
+    """``(variable, alias)`` for each ``x.prop AS alias`` in a query."""
+    return re.findall(r"\b(\w+)\.\w+ AS (\w+)", query)
+
+
+def test_every_projection_binds_a_variable_the_query_actually_matches(monkeypatch):
+    # Regression guard: the goal lookup binds the node as `g` but projected its
+    # property columns off `n`, so the query was a Cypher syntax error. It only
+    # fired when a path failed to name Domain Admins, which no test covered —
+    # the unit suite was fully green while verify_path crashed on a real graph.
+    queries = _captured_queries(monkeypatch, lambda q: [])
+    toolmod.verify_path(["GHOST_A", "GHOST_B"])
+
+    assert queries, "verify_path issued no queries"
+    for query in queries:
+        matched = set(re.findall(r"MATCH \((\w+):", query))
+        for variable, _alias in _projections(query):
+            assert variable in matched, (
+                f"query projects off '{variable}' but only binds {sorted(matched)}:\n{query}"
+            )
+
+
+def test_goal_is_looked_up_when_the_path_does_not_name_domain_admins(monkeypatch):
+    # The unconstrained-delegation and ESC1 rules are anchored on the goal, so
+    # verify_path must resolve it even when the agent's path never mentions it.
+    def rows_for(query):
+        if "Group" in query:                      # the explicit goal lookup
+            return [{"oid": "DA", "name": "DOMAIN ADMINS@CORP.LOCAL",
+                     "unconstraineddelegation": None, "esc1": None, "hasspn": None,
+                     "crackable": None, "roastable_target": None, "cred_target": None}]
+        return [{"oid": "H", "name": "HOST01.CORP.LOCAL", "unconstraineddelegation": True,
+                 "esc1": None, "hasspn": None, "crackable": None,
+                 "roastable_target": None, "cred_target": None}]
+
+    _captured_queries(monkeypatch, rows_for)
+    monkeypatch.setattr(toolmod, "_edge_types_between", lambda *a, **k: {})
+
+    # HOST01 -> DA is justified purely by unconstraineddelegation on the source.
+    out = toolmod.verify_path(["HOST01", "DOMAIN ADMINS@CORP.LOCAL"])
+    assert out["valid"] is True
     assert out["derived_steps"] == 1

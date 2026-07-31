@@ -24,6 +24,7 @@ from .tool_registry import TOOLS
 
 MAX_STEPS = 20      # default reasoning-step budget (was 12; large graphs need room)
 MAX_REVISIONS = 2   # how many times a rejected finish may be sent back for repair
+MAX_REFORMATS = 2   # how many times an unparseable (non-JSON) reply may be re-asked
 
 
 @dataclass
@@ -88,7 +89,8 @@ If no path to DOMAIN ADMINS exists:
 
 
 def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = True,
-              on_step=None, verify_finish: bool = True, max_revisions: int = MAX_REVISIONS) -> AgentResult:
+              on_step=None, verify_finish: bool = True, max_revisions: int = MAX_REVISIONS,
+              max_reformats: int = MAX_REFORMATS) -> AgentResult:
     """Run the ReAct loop from ``start_node`` and return structured telemetry.
 
     ``on_step``, if given, is called after each turn with a dict
@@ -103,6 +105,7 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
 
     tool_calls = 0
     revisions_used = 0
+    reformats_used = 0
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
     started = time.perf_counter()
 
@@ -123,7 +126,23 @@ def run_agent(start_node: str, *, max_steps: int = MAX_STEPS, verbose: bool = Tr
 
         action = _parse_json(response)
         if action is None:
-            # Model didn't return usable JSON; treat the raw text as the answer.
+            # The reply wasn't a JSON action. Ending the run here throws away all
+            # the work done so far — and the common case is a model that solved
+            # the task and then wrote its answer as prose on the final turn,
+            # which scores as "ran out of steps" despite having found the path.
+            # Ask for the action again, the same way a rejected verify_path does.
+            if reformats_used < max_reformats:
+                reformats_used += 1
+                if verbose:
+                    print(f"\nUnparseable reply (reformat {reformats_used}/{max_reformats})")
+                history.append({"role": "user", "content":
+                    "Observation:\nYour last reply was not a JSON object, so no action was "
+                    "taken. Reply with EXACTLY one JSON object and nothing else — no prose, "
+                    "no code fence. If you already have the full path, finish:\n"
+                    '{"action": "finish", "answer": "A -> B -> DOMAIN ADMINS", '
+                    '"path": ["A", "B", "DOMAIN ADMINS"]}'})
+                continue
+            # Out of reformat attempts; treat the raw text as the answer.
             return _result(response.strip(), False, None, tool_calls, step + 1, started, max_steps, usage, history)
 
         if action.get("action") == "finish":

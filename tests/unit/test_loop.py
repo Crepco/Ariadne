@@ -185,8 +185,37 @@ def test_run_agent_hits_max_steps(monkeypatch):
 def test_run_agent_non_json_reply_ends_run(monkeypatch):
     monkeypatch.setattr(loop, "chat", lambda history: LLMResult("I give up, sorry.", 1, 1, 0.0))
 
-    res = loop.run_agent("A", max_steps=5, verbose=False)
+    res = loop.run_agent("A", max_steps=5, verbose=False, max_reformats=0)
 
     assert res.finished is False
     assert res.answer == "I give up, sorry."
     assert res.tool_calls == 0
+
+
+def test_prose_answer_is_re_asked_as_json_instead_of_ending_the_run(monkeypatch):
+    # Observed on a real run: the model traced and verified the correct path,
+    # then wrote it as prose on the final turn. Ending there scored a solved
+    # task as "ran out of steps" — so an unparseable reply is re-asked first.
+    replies = iter([
+        LLMResult("A -> B -> DOMAIN ADMINS", 1, 1, 0.0),                       # prose
+        LLMResult('{"action":"finish","answer":"A -> B -> DOMAIN ADMINS",'
+                  '"path":["A","B","DOMAIN ADMINS"]}', 1, 1, 0.0),             # corrected
+    ])
+    monkeypatch.setattr(loop, "chat", lambda history: next(replies))
+    monkeypatch.setattr(loop, "TOOLS", {"verify_path": lambda path: {"valid": True}})
+
+    res = loop.run_agent("A", max_steps=5, verbose=False)
+
+    assert res.finished is True
+    assert res.path_field == ["A", "B", "DOMAIN ADMINS"]
+
+
+def test_reformat_budget_is_bounded(monkeypatch):
+    # A model that never returns JSON must not consume the whole step budget.
+    monkeypatch.setattr(loop, "chat", lambda history: LLMResult("still prose", 1, 1, 0.0))
+
+    res = loop.run_agent("A", max_steps=10, verbose=False, max_reformats=2)
+
+    assert res.finished is False
+    assert res.steps == 3          # 2 reformat attempts + the give-up turn
+    assert res.answer == "still prose"

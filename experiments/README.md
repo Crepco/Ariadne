@@ -44,6 +44,8 @@ For a genuine variance estimate:
 python experiments/run_benchmark.py --sizes 150 350 --random 5 --trials 5 --temperature 0.7
 ```
 
+> **Not every model accepts a temperature.** Current Claude models (Opus 5, Sonnet 5, Opus 4.7/4.8, Fable 5) reject the parameter outright, so the backend drops it and those runs stay deterministic — `--trials` adds no variance there. The runner prints a warning naming the affected models; pick one that still accepts sampling if you need a variance sweep.
+
 Two things to check before quoting the result:
 
 - **The denominator.** The sweep prints `attempted N, scored M` per model at the end. Runs
