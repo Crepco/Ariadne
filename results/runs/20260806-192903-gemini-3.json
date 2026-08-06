@@ -1,0 +1,25 @@
+{
+  "timestamp_utc": "20260806-192903",
+  "git_sha": "f4600eb",
+  "models": [
+    "gemini-3.1-flash-lite"
+  ],
+  "temperature": 0.0,
+  "seed": 1337,
+  "sizes": [
+    150,
+    350,
+    600
+  ],
+  "random_starts": 3,
+  "trials": 1,
+  "max_steps": null,
+  "source_export": null,
+  "infra_retries": 2,
+  "runs": 39,
+  "attempted_per_model": {
+    "gemini-3.1-flash-lite": 39
+  },
+  "dropped_per_model": {},
+  "wall_seconds": 1386.8
+}
