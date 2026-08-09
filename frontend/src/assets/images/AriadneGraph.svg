@@ -1,0 +1,149 @@
+<svg viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <filter id="g1" x="-150%" y="-150%" width="400%" height="400%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="g2" x="-150%" y="-150%" width="400%" height="400%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <!-- decorative background mesh -->
+  <g stroke="#2a3350" stroke-width="1" opacity="0.5">
+    <line x1="40" y1="80" x2="140" y2="140"/>
+    <line x1="140" y1="140" x2="120" y2="230"/>
+    <line x1="700" y1="60" x2="780" y2="110"/>
+    <line x1="850" y1="60" x2="900" y2="120"/>
+    <line x1="60" y1="430" x2="150" y2="460"/>
+    <line x1="620" y1="440" x2="700" y2="470"/>
+  </g>
+  <g fill="#4b4a8f" opacity="0.55">
+    <circle cx="40" cy="80" r="4"/>
+    <circle cx="140" cy="140" r="3"/>
+    <circle cx="120" cy="230" r="3.5"/>
+    <circle cx="700" cy="60" r="3.5"/>
+    <circle cx="780" cy="110" r="3"/>
+    <circle cx="850" cy="60" r="3.5"/>
+    <circle cx="900" cy="120" r="3"/>
+    <circle cx="60" cy="430" r="3.5"/>
+    <circle cx="150" cy="460" r="3"/>
+    <circle cx="620" cy="440" r="3"/>
+    <circle cx="700" cy="470" r="3.5"/>
+    <circle cx="330" cy="60" r="3"/>
+    <circle cx="480" cy="440" r="3"/>
+    <circle cx="920" cy="300" r="3.5"/>
+  </g>
+
+  <!-- edges -->
+  <!-- canonical (orange) -->
+  <g fill="none" stroke="#e6a23c" stroke-width="3">
+    <line x1="94" y1="320" x2="176" y2="320"/>
+    <line x1="244" y1="320" x2="356" y2="248"/>
+    <line x1="418" y1="212" x2="528" y2="128"/>
+    <line x1="592" y1="112" x2="796" y2="178"/>
+    <line x1="592" y1="358" x2="796" y2="204"/>
+  </g>
+  <!-- flowing highlight over canonical edges -->
+  <g fill="none" stroke="#ffd699" stroke-width="3" stroke-linecap="round">
+    <line x1="94" y1="320" x2="176" y2="320" stroke-dasharray="8 60">
+      <animate attributeName="stroke-dashoffset" from="0" to="-68" dur="2.4s" repeatCount="indefinite"/>
+    </line>
+    <line x1="244" y1="320" x2="356" y2="248" stroke-dasharray="8 90">
+      <animate attributeName="stroke-dashoffset" from="0" to="-98" dur="2.6s" repeatCount="indefinite"/>
+    </line>
+    <line x1="418" y1="212" x2="528" y2="128" stroke-dasharray="8 90">
+      <animate attributeName="stroke-dashoffset" from="0" to="-98" dur="2.6s" begin="0.3s" repeatCount="indefinite"/>
+    </line>
+    <line x1="592" y1="112" x2="796" y2="178" stroke-dasharray="8 130">
+      <animate attributeName="stroke-dashoffset" from="0" to="-138" dur="3s" begin="0.6s" repeatCount="indefinite"/>
+    </line>
+    <line x1="592" y1="358" x2="796" y2="204" stroke-dasharray="8 120">
+      <animate attributeName="stroke-dashoffset" from="0" to="-128" dur="2.9s" begin="0.9s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- inferred (teal dashed) -->
+  <line x1="406" y1="256" x2="548" y2="342" fill="none" stroke="#2dd8b5" stroke-width="3" stroke-dasharray="9 8">
+    <animate attributeName="stroke-dashoffset" from="0" to="-34" dur="1.8s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- nodes -->
+  <!-- svc_backup (start, blue) -->
+  <g>
+    <circle cx="60" cy="320" r="34" fill="#0d3b66" opacity="0.35" filter="url(#g2)"/>
+    <circle cx="60" cy="320" r="22" fill="#0f1626" stroke="#3b82f6" stroke-width="3">
+      <animate attributeName="r" values="21;24;21" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="60" cy="313" r="6" fill="#3b82f6"/>
+    <path d="M50,330 a10,9 0 0 1 20,0 z" fill="#3b82f6"/>
+    <text x="60" y="366" fill="#e8eaf2" font-size="15" text-anchor="middle">svc_backup</text>
+    <text x="60" y="384" fill="#8891ab" font-size="12" text-anchor="middle">(User)</text>
+  </g>
+
+  <!-- IT Support (orange) -->
+  <g>
+    <circle cx="210" cy="320" r="30" fill="#5c3d0d" opacity="0.3" filter="url(#g1)"/>
+    <circle cx="210" cy="320" r="20" fill="#0f1626" stroke="#e6a23c" stroke-width="3"/>
+    <circle cx="210" cy="313" r="6" fill="#e6a23c"/>
+    <path d="M200,330 a10,9 0 0 1 20,0 z" fill="#e6a23c"/>
+    <text x="210" y="364" fill="#e8eaf2" font-size="15" text-anchor="middle">IT Support</text>
+  </g>
+
+  <!-- svc_sql$ (teal) -->
+  <g>
+    <circle cx="390" cy="230" r="30" fill="#0d4a40" opacity="0.35" filter="url(#g1)"/>
+    <circle cx="390" cy="230" r="20" fill="#0f1626" stroke="#2dd8b5" stroke-width="3">
+      <animate attributeName="r" values="19;22;19" dur="2.6s" repeatCount="indefinite"/>
+    </circle>
+    <rect x="380" y="221" width="20" height="13" rx="2" fill="none" stroke="#2dd8b5" stroke-width="2"/>
+    <line x1="390" y1="234" x2="390" y2="239" stroke="#2dd8b5" stroke-width="2"/>
+    <text x="424" y="226" fill="#e8eaf2" font-size="15" text-anchor="start">svc_sql$</text>
+    <text x="424" y="244" fill="#7fe8d4" font-size="12" text-anchor="start">(Kerberoast)</text>
+  </g>
+
+  <!-- SQL Admins (orange) -->
+  <g>
+    <circle cx="560" cy="110" r="32" fill="#5c3d0d" opacity="0.32" filter="url(#g1)"/>
+    <circle cx="560" cy="110" r="22" fill="#0f1626" stroke="#e6a23c" stroke-width="3">
+      <animate attributeName="r" values="21;24;21" dur="2.4s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="560" cy="103" r="6.5" fill="#e6a23c"/>
+    <path d="M549,120 a11,10 0 0 1 22,0 z" fill="#e6a23c"/>
+    <text x="592" y="106" fill="#e8eaf2" font-size="15" text-anchor="start">SQL Admins</text>
+  </g>
+
+  <!-- Domain Admins (goal, red) -->
+  <g>
+    <circle cx="830" cy="190" r="42" fill="#5c0d16" opacity="0.4" filter="url(#g2)"/>
+    <circle cx="830" cy="190" r="28" fill="#0f1626" stroke="#ef4444" stroke-width="4">
+      <animate attributeName="r" values="26;31;26" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.75;1;0.75" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M816,196 l4,-16 8,10 8,-14 8,14 8,-10 4,16 z" fill="#ef4444" transform="translate(-2,-4) scale(0.85)" />
+    <text x="830" y="238" fill="#ff8b8b" font-size="16" font-weight="700" text-anchor="middle">Domain Admins</text>
+  </g>
+
+  <!-- DC01$ (teal) -->
+  <g>
+    <circle cx="560" cy="370" r="30" fill="#0d4a40" opacity="0.35" filter="url(#g1)"/>
+    <circle cx="560" cy="370" r="20" fill="#0f1626" stroke="#2dd8b5" stroke-width="3"/>
+    <rect x="550" y="361" width="20" height="13" rx="2" fill="none" stroke="#2dd8b5" stroke-width="2"/>
+    <line x1="560" y1="374" x2="560" y2="379" stroke="#2dd8b5" stroke-width="2"/>
+    <text x="594" y="366" fill="#e8eaf2" font-size="15" text-anchor="start">DC01$</text>
+    <text x="594" y="384" fill="#7fe8d4" font-size="12" text-anchor="start">(Unconstrained</text>
+    <text x="594" y="400" fill="#7fe8d4" font-size="12" text-anchor="start">Delegation)</text>
+  </g>
+
+  <!-- legend -->
+  <g>
+    <rect x="700" y="330" width="220" height="150" rx="10" fill="#0f1420" stroke="#2a3350" stroke-width="1.5"/>
+    <line x1="718" y1="356" x2="748" y2="356" stroke="#e6a23c" stroke-width="3"/>
+    <text x="758" y="360" fill="#c9cee0" font-size="13">Canonical Edge</text>
+    <line x1="718" y1="384" x2="748" y2="384" stroke="#2dd8b5" stroke-width="3" stroke-dasharray="6 5"/>
+    <text x="758" y="388" fill="#c9cee0" font-size="13">Inferred Step</text>
+    <circle cx="733" cy="412" r="6" fill="#3b82f6"/>
+    <text x="758" y="416" fill="#c9cee0" font-size="13">Start</text>
+    <circle cx="733" cy="440" r="6" fill="#ef4444"/>
+    <text x="758" y="444" fill="#c9cee0" font-size="13">Goal</text>
+  </g>
+</svg>
