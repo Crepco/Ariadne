@@ -1,11 +1,11 @@
-import React from 'react'
-
+import ariadneLogo from "../../assets/images/AriadneLogo_animated.svg";
+import ariadnegraph from "../../assets/images/AriadneGraph.svg"
 const Navbar = () => {
   return (
-    <div className='bg-black text-white'>
-      Ariadne 
-    </div>
-  )
-}
+    <nav className="bg-black text-white">
+     
+    </nav>
+  );
+};
 
-export default Navbar
+export default Navbar;
