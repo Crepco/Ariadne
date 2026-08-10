@@ -3,7 +3,7 @@ import AriadneGraph from "../../assets/images/AriadneGraph.svg";
 
 const HeroSection = () => {
   return (
-    <section className="relative min-h-screen overflow-hidden bg-[#020817] flex items-center pt-28">
+    <section className="relative min-h-screen overflow-hidden bg-[#020817] flex items-center pt-28 pb-20">
 
       {/* Background Glow */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_45%,rgba(91,63,180,0.14),transparent_38%)] pointer-events-none"></div>
