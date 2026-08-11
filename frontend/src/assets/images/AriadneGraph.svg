@@ -119,7 +119,9 @@
       <animate attributeName="r" values="26;31;26" dur="2s" repeatCount="indefinite"/>
       <animate attributeName="opacity" values="0.75;1;0.75" dur="2s" repeatCount="indefinite"/>
     </circle>
-    <path d="M816,196 l4,-16 8,10 8,-14 8,14 8,-10 4,16 z" fill="#ef4444" transform="translate(-2,-4) scale(0.85)" />
+    <polygon points="811,196 815,178 823,190 830,172 837,190 845,178 849,196"
+             fill="#ef4444" stroke="#ef4444" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="811" y="196" width="38" height="6" rx="1.5" fill="#ef4444"/>
     <text x="830" y="238" fill="#ff8b8b" font-size="16" font-weight="700" text-anchor="middle">Domain Admins</text>
   </g>
 
