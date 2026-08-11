@@ -269,14 +269,14 @@ const Navbar = () => {
 
           {isHomePage ? (
             <a
-              href="#benchmark"
+              href="/app"
               className="px-5 py-2 rounded-lg bg-gradient-to-r from-[#6D4AFF] to-[#825CFF] text-white text-sm font-semibold shadow-[0_0_25px_rgba(109,74,255,0.3)] hover:shadow-[0_0_35px_rgba(109,74,255,0.55)] hover:brightness-110 active:scale-[0.97] transition-all duration-300"
             >
               Get Started
             </a>
           ) : (
             <Link
-              to="/#benchmark"
+              to="/app"
               className="px-5 py-2 rounded-lg bg-gradient-to-r from-[#6D4AFF] to-[#825CFF] text-white text-sm font-semibold shadow-[0_0_25px_rgba(109,74,255,0.3)] hover:shadow-[0_0_35px_rgba(109,74,255,0.55)] hover:brightness-110 active:scale-[0.97] transition-all duration-300"
             >
               Get Started
@@ -387,7 +387,7 @@ const Navbar = () => {
 
             {isHomePage ? (
               <a
-                href="#benchmark"
+                href="/app"
                 onClick={closeMenu}
                 className="flex-1 text-center px-5 py-3 rounded-lg bg-gradient-to-r from-[#6D4AFF] to-[#825CFF] text-white font-semibold shadow-[0_0_20px_rgba(109,74,255,0.25)] active:scale-[0.98] transition-transform"
               >
@@ -395,7 +395,7 @@ const Navbar = () => {
               </a>
             ) : (
               <Link
-                to="/#benchmark"
+                to="/app"
                 onClick={closeMenu}
                 className="flex-1 text-center px-5 py-3 rounded-lg bg-gradient-to-r from-[#6D4AFF] to-[#825CFF] text-white font-semibold shadow-[0_0_20px_rgba(109,74,255,0.25)] active:scale-[0.98] transition-transform"
               >

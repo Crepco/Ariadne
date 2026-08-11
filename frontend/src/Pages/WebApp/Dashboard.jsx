@@ -88,9 +88,6 @@ const Dashboard = () => {
     <div className="min-h-screen bg-[#070b13] text-white">
       <div className="flex min-h-screen">
 
-
-
-
         {/* MAIN AREA */}
         <main className="flex min-w-0 flex-1 flex-col">
 

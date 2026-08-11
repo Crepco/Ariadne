@@ -48,10 +48,10 @@ const Footer = () => {
             </h3>
 
             <div className="mt-5 flex flex-col gap-3 text-sm text-slate-400">
-              <a href="#about" className="transition-colors duration-200 hover:text-[#6D4AFF]">
+              <a href="/" className="transition-colors duration-200 hover:text-[#6D4AFF]">
                 What is Ariadne
               </a>
-              <a href="#how-it-works" className="transition-colors duration-200 hover:text-[#6D4AFF]">
+              <a href="#working" className="transition-colors duration-200 hover:text-[#6D4AFF]">
                 How it works
               </a>
               <a href="#features" className="transition-colors duration-200 hover:text-[#6D4AFF]">
