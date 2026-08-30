@@ -43,3 +43,6 @@ experiments/.benchmark.lock
 Thumbs.db
 .vscode/
 .idea/
+
+# --- Vultr lab (local, throwaway; never commit) ---
+infra/vultr/
