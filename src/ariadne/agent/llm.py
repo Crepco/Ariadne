@@ -77,6 +77,35 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 _OPENROUTER_MAX_TOKENS = int(os.getenv("OPENROUTER_MAX_TOKENS", "512"))
 
+# The "OpenRouter" backend is really "any OpenAI-compatible gateway that fronts
+# many models behind one bill" — OpenRouter is just the default. Swapping to a
+# different gateway (Portkey, a self-hosted proxy to Bedrock/Vertex, ...) is a
+# same-shape /chat/completions POST, so it only needs the URL and auth style to
+# change, not new request-building code.
+#
+# GATEWAY_AUTH_STYLE=bearer (default): Authorization: Bearer <key> — OpenRouter,
+#   Together, Fireworks, most OpenAI-compatible gateways.
+# GATEWAY_AUTH_STYLE=portkey: x-portkey-api-key: <key>, plus an optional
+#   x-portkey-virtual-key header from PORTKEY_VIRTUAL_KEY (Portkey routes a
+#   request to a specific provider+key pair via that virtual key rather than a
+#   plain Bearer token).
+_OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
+_GATEWAY_AUTH_STYLE = os.getenv("GATEWAY_AUTH_STYLE", "bearer").strip().lower()
+_PORTKEY_VIRTUAL_KEY = os.getenv("PORTKEY_VIRTUAL_KEY", "").strip()
+
+
+def _gateway_headers(key: str) -> dict[str, str]:
+    if _GATEWAY_AUTH_STYLE == "portkey":
+        headers = {"x-portkey-api-key": key, "Content-Type": "application/json"}
+        if _PORTKEY_VIRTUAL_KEY:
+            headers["x-portkey-virtual-key"] = _PORTKEY_VIRTUAL_KEY
+        return headers
+    return {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "X-Title": "Ariadne",
+    }
+
 # --- Anthropic (native) ----------------------------------------------------
 DEFAULT_ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
 # Thinking counts against max_tokens on this API, and current Claude models
@@ -101,6 +130,19 @@ ANTHROPIC_PRICES = {
     "claude-fable-5": (10.0, 50.0),
 }
 
+# USD per million tokens (input, output) for models called directly against a
+# gateway (OpenAI's own API here) that doesn't echo a cost field the way
+# OpenRouter does — so cost is computed from a known price table instead of
+# left at 0.0. Only consulted when the gateway response has no usable cost.
+# Prices as of 2026-08; unknown models record tokens with cost 0.0.
+GATEWAY_MODEL_PRICES = {
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-5": (1.25, 10.00),   # confirmed from developers.openai.com/api/docs/pricing, 2026-08-31
+}
+
 # Models that reject `temperature` outright (HTTP 400) rather than ignoring it.
 # Sampling parameters were removed across the current Claude generation; sending
 # one is an error, not a no-op, so the temperature sweep has to know to skip it.
@@ -118,6 +160,37 @@ def accepts_temperature(model: str) -> bool:
     instead of the variance it was asking for.
     """
     return not any(model.startswith(m) for m in _NO_SAMPLING_PARAMS)
+
+
+def accepts_effort(model: str) -> bool:
+    """Whether ``model`` accepts the ``output_config.effort`` reasoning-depth dial.
+
+    Only the extended-thinking-capable models in ``_NO_SAMPLING_PARAMS`` support
+    it (the same models that reject a sampling temperature — effort is what
+    replaced it) — non-reasoning models like claude-haiku-4-5 400 on it.
+    """
+    return any(model.startswith(m) for m in _NO_SAMPLING_PARAMS)
+
+
+# OpenAI's own reasoning-tier models (o1/o3/o4, gpt-5.x) use a different
+# completion-budget param name and reject a non-default temperature — a
+# documented, stable API convention (unlike Anthropic's per-model quirks
+# above), so a static prefix check is appropriate rather than runtime
+# learning. Confirmed directly against api.openai.com, 2026-08-31.
+_OPENAI_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    return any(model.startswith(p) for p in _OPENAI_REASONING_PREFIXES)
+
+
+# Reasoning tokens count against the same completion budget as visible output
+# on this API — identical to the Claude "thinking counts against max_tokens"
+# issue this file already works around with _ANTHROPIC_MAX_TOKENS. The
+# OpenRouter-tuned default (2000) let gpt-5 burn its whole budget on internal
+# reasoning and emit no visible JSON action text at all (confirmed: 7952
+# completion tokens over 5 turns, empty final answer).
+_OPENAI_REASONING_MAX_TOKENS = int(os.getenv("OPENAI_REASONING_MAX_TOKENS", "6000"))
 
 
 def _env_temperature() -> float:
@@ -306,12 +379,14 @@ def _extract_content(resp) -> str | None:
     return _parse_response(resp)[0]
 
 
-def _usage_fields(usage: dict) -> tuple[int, int, float]:
-    return (
-        int(usage.get("prompt_tokens") or 0),
-        int(usage.get("completion_tokens") or 0),
-        float(usage.get("cost") or 0.0),   # OpenRouter reports cost in USD
-    )
+def _usage_fields(usage: dict, model: str = "") -> tuple[int, int, float]:
+    pt = int(usage.get("prompt_tokens") or 0)
+    ct = int(usage.get("completion_tokens") or 0)
+    cost = float(usage.get("cost") or 0.0)   # OpenRouter reports cost in USD
+    if cost == 0.0 and model in GATEWAY_MODEL_PRICES:
+        in_price, out_price = GATEWAY_MODEL_PRICES[model]
+        cost = (pt * in_price + ct * out_price) / 1_000_000
+    return pt, ct, cost
 
 
 def _openrouter(messages: list[Message], model: str, max_retries: int,
@@ -319,38 +394,47 @@ def _openrouter(messages: list[Message], model: str, max_retries: int,
     if not _OPENROUTER_KEYS:
         raise LLMError("No OPENROUTER_API_KEYS configured in .env")
     temperature = _client.temperature if temperature is None else temperature
-    max_tokens = _OPENROUTER_MAX_TOKENS if max_tokens is None else max_tokens
+    if max_tokens is None:
+        max_tokens = (_OPENAI_REASONING_MAX_TOKENS if _is_openai_reasoning_model(model)
+                      else _OPENROUTER_MAX_TOKENS)
     last: Exception | None = None
+    is_openrouter = "openrouter.ai" in _OPENROUTER_BASE_URL
+    body = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        # Cap the completion budget. The agent only emits a small JSON
+        # object per turn, so ~512 tokens is ample — and it stops
+        # OpenRouter from *reserving* the model's full 16k-token budget
+        # against the account balance, which caused HTTP 402
+        # "requires more credits, or fewer max_tokens" once free credit
+        # ran low.
+        "max_tokens": max_tokens,
+    }
+    if not is_openrouter and _is_openai_reasoning_model(model):
+        # Talking to OpenAI directly (real OpenRouter normalises this for
+        # you): reasoning-tier models rename the completion-budget param and
+        # only accept the default temperature (1) — sending 0 400s.
+        body["max_completion_tokens"] = body.pop("max_tokens")
+        del body["temperature"]
+    if is_openrouter:
+        # Ask OpenRouter to include the USD cost in the usage block. Other
+        # OpenAI-compatible gateways (OpenAI itself, Portkey, ...) 400 on this
+        # unrecognised field, so it's only sent when actually talking to OpenRouter.
+        body["usage"] = {"include": True}
     for attempt in range(max_retries):
         key = _next_key()  # rotate keys to spread per-key rate limits
         try:
             resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    "X-Title": "Ariadne",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    # Cap the completion budget. The agent only emits a small JSON
-                    # object per turn, so ~512 tokens is ample — and it stops
-                    # OpenRouter from *reserving* the model's full 16k-token budget
-                    # against the account balance, which caused HTTP 402
-                    # "requires more credits, or fewer max_tokens" once free credit
-                    # ran low.
-                    "max_tokens": max_tokens,
-                    # Ask OpenRouter to include the USD cost in the usage block.
-                    "usage": {"include": True},
-                },
+                _OPENROUTER_BASE_URL,
+                headers=_gateway_headers(key),
+                json=body,
                 timeout=120,
             )
             if resp.status_code == 200:
                 content, usage = _parse_response(resp)
                 if content is not None:
-                    pt, ct, cost = _usage_fields(usage)
+                    pt, ct, cost = _usage_fields(usage, model)
                     return LLMResult(content, pt, ct, cost)
                 # 200 OK but no usable completion; treat as transient and retry.
                 last = RuntimeError(f"OpenRouter 200 without content: {resp.text[:160]}")
@@ -416,6 +500,39 @@ def _anthropic_text(content) -> str:
     )
 
 
+# Per-model params Anthropic has actually rejected at runtime (learned, not
+# guessed). `effort` and the server-side-fallback beta turned out to be two
+# *independent* capabilities — claude-opus-4-8 accepts effort but rejects
+# fallbacks, which accepts_effort()'s single reasoning-model heuristic can't
+# predict. Rather than hardcode a second allowlist we're not certain of,
+# unsupported params are learned on first 400 and never resent for that model.
+_unsupported_params: dict[str, set[str]] = {}
+_unsupported_param_re = re.compile(r"does not support the `(\w+)` parameter")
+
+
+def _strip_unsupported(request: dict, model: str) -> None:
+    """Remove any param already known-unsupported by ``model`` from ``request``."""
+    known = _unsupported_params.get(model)
+    if not known:
+        return
+    if "effort" in known:
+        request.pop("output_config", None)
+    if "fallbacks" in known or "betas" in known:
+        request.pop("fallbacks", None)
+        request.pop("betas", None)
+
+
+def _learn_unsupported(model: str, error_text: str) -> str | None:
+    """If ``error_text`` names an unsupported param, remember it. Returns the
+    param name if one was learned (caller should retry), else None."""
+    m = _unsupported_param_re.search(error_text)
+    if not m:
+        return None
+    param = m.group(1)
+    _unsupported_params.setdefault(model, set()).add(param)
+    return param
+
+
 def _anthropic(messages: list[Message], model: str, max_retries: int,
                temperature: float | None = None, max_tokens: int | None = None) -> LLMResult:
     client = _anthropic_sdk()
@@ -426,22 +543,26 @@ def _anthropic(messages: list[Message], model: str, max_retries: int,
         "model": model,
         "max_tokens": max_tokens,
         "messages": turns,
-        # Effort is the cost/depth dial on this API. Sampling parameters were
-        # removed from the current Claude generation, so `temperature` is only
-        # sent to models that still accept it (see accepts_temperature).
-        "output_config": {"effort": ANTHROPIC_EFFORT},
-        # Ariadne traces Active Directory attack paths, which sits squarely in
-        # the domain the cyber safety classifiers watch. A refused request comes
-        # back as a normal 200 with stop_reason="refusal", so opting into
-        # server-side fallbacks means a benign run gets answered by the fallback
-        # model instead of dying on a false positive.
-        "betas": ["server-side-fallback-2026-07-01"],
-        "fallbacks": "default",
     }
     if system:
         request["system"] = system
     if temperature is not None and accepts_temperature(model):
         request["temperature"] = temperature
+    # Effort (the cost/depth dial) and server-side fallbacks are both features
+    # of the extended-thinking model family (see accepts_effort) — a smaller
+    # non-reasoning model like claude-haiku-4-5 400s on either. Even within
+    # that family, support isn't uniform (see _unsupported_params above), so
+    # _strip_unsupported prunes anything already learned-unsupported for model.
+    if accepts_effort(model):
+        request["output_config"] = {"effort": ANTHROPIC_EFFORT}
+        # Ariadne traces Active Directory attack paths, which sits squarely in
+        # the domain the cyber safety classifiers watch. A refused request comes
+        # back as a normal 200 with stop_reason="refusal", so opting into
+        # server-side fallbacks means a benign run gets answered by the fallback
+        # model instead of dying on a false positive.
+        request["betas"] = ["server-side-fallback-2026-07-01"]
+        request["fallbacks"] = "default"
+    _strip_unsupported(request, model)
 
     last: Exception | None = None
     for attempt in range(max_retries):
@@ -458,8 +579,14 @@ def _anthropic(messages: list[Message], model: str, max_retries: int,
                     "Add credit at console.anthropic.com -> Plans & Billing (an API key "
                     "alone does not carry a balance; a Claude.ai subscription is separate)."
                 ) from e
-            # Any other 4xx except rate limiting is a bad request: retrying an
-            # unsupported parameter just burns the retry budget.
+            # An unsupported-param 400 is learned and stripped, then retried
+            # immediately — no point burning the retry budget on backoff for a
+            # request that will fail identically every time otherwise.
+            if status == 400 and _learn_unsupported(model, str(e)):
+                _strip_unsupported(request, model)
+                continue
+            # Any other 4xx except rate limiting is a bad request: retrying
+            # unchanged just burns the retry budget.
             if status is not None and 400 <= status < 500 and status != 429:
                 raise LLMError(f"Anthropic HTTP {status}: {e}") from e
             time.sleep(_backoff(attempt))

@@ -1,0 +1,10 @@
+{
+  "timestamp_utc": "20260830-211218",
+  "dataset": "real GOAD-Light 2-domain forest (merged CE export)",
+  "graph_nodes": 147,
+  "models": [
+    "gemini-flash-lite-latest"
+  ],
+  "note": "gemini-2.5-flash and OpenRouter free Nemotron/GLM models were attempted but excluded: their free-tier quotas cannot sustain even one full agentic run (~15-30 LLM calls/run) as of this date.",
+  "max_steps": 35
+}

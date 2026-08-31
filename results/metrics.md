@@ -4,30 +4,36 @@ _Rates carry 95% Wilson score intervals. With samples this small, the interval i
 
 | Metric | Value |
 | --- | --- |
-| Runs scored | 39 |
-| Correctness | 89.7% [76.4–95.9] |
-| Valid-path rate | 89.7% [76.4–95.9] |
-| Hallucination rate | 0.0% [0.0–9.0] |
-| Optimal of paths found | 97.1% (35 found) |
-| Beats BloodHound | 12 of 12 advanced-required |
-| Advanced-case recall | 100.0% [75.7–100.0] (12/12) |
-| Avg tool calls (solved) | 5.69 |
-| Avg runtime (s) | 34.67 |
-| Agent misses (of truly reachable) | 3/38 |
-| Cost (USD) | $0.0000/run, $0.0000 total |
+| Runs scored | 26 |
+| Correctness | 34.6% [19.4–53.8] |
+| Valid-path rate | 7.7% [2.1–24.1] |
+| Hallucination rate | 3.8% [0.7–18.9] |
+| Optimal of paths found | 100.0% (2 found) |
+| Beats BloodHound | 0 of 8 advanced-required |
+| Advanced-case recall | 0.0% [0.0–32.4] (0/8) |
+| Avg tool calls (solved) | 14.89 |
+| Avg runtime (s) | 114.22 |
+| Agent misses (of truly reachable) | 11/13 |
+| Cost (USD) | $0.2249/run, $5.8473 total |
 
 ### Scaling by graph size
 
 | Nodes | Runs | Correctness | Hallucination | Beats BH | Avg tool calls | Avg time (s) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 222 | 13 | 92.3% | 0.0% | 4 | 7.2 | 34.66 |
-| 487 | 13 | 100.0% | 0.0% | 4 | 6.0 | 30.52 |
-| 819 | 13 | 76.9% | 0.0% | 4 | 8.1 | 38.84 |
+| 147 | 26 | 34.6% | 3.8% | 0 | 16.5 | 114.22 |
+
+### By model
+
+| Model | Runs | Correctness (95% CI) | Hallucination | Beats BH | Avg tool calls | Avg time (s) | Avg cost |
+| :-- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| gemini-flash-lite-latest | 6 | 66.7% [30.0–90.3] | 0.0% | 0 | 25.2 | 124.81 | $0.0000 |
+| gpt-4o-mini | 6 | 50.0% [18.8–81.2] | 0.0% | 0 | 6.5 | 14.31 | $0.0031 |
+| claude-haiku-4-5 | 6 | 16.7% [3.0–56.4] | 0.0% | 0 | 19.7 | 88.06 | $0.3048 |
+| gpt-4o | 6 | 16.7% [3.0–56.4] | 0.0% | 0 | 16.7 | 244.39 | $0.3520 |
+| claude-opus-4-8 | 2 | 0.0% [0.0–65.8] | 50.0% | 0 | 10.0 | 70.21 | $0.9439 |
 
 ### Failure-mode breakdown by graph size
 
 | Nodes | correct | hallucinated | gave up (path existed) | ran out of steps | wrong path |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 222 | 12 | 0 | 0 | 1 | 0 |
-| 487 | 13 | 0 | 0 | 0 | 0 |
-| 819 | 10 | 0 | 0 | 3 | 0 |
+| 147 | 9 | 1 | 7 | 7 | 2 |

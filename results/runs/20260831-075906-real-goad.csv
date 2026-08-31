@@ -1,0 +1,130 @@
+model,graph_size,scenario,start_name,start_node,goal,proposed_path,path_valid,hallucinated_edge,correct,declared_no_path,incomplete,agent_hops,derived_steps,baseline_reachable,baseline_hops,bloodhound_reachable,bloodhound_hops,beats_bloodhound,matches_baseline,optimal,tool_calls,steps,max_steps,time_seconds,prompt_tokens,completion_tokens,cost_usd,attempts,error
+gemini-flash-lite-latest,147,path:lord.varys,lord.varys@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1122,DOMAIN ADMINS,LORD.VARYS@SEVENKINGDOMS.LOCAL -> DOMAIN ADMINS@SEVENKINGDOMS.LOCAL,True,False,True,False,False,1,0,True,1,True,1,False,True,True,17,20,35,69.681,89330,915,0.0,1,
+gemini-flash-lite-latest,147,path:catelyn.stark,catelyn.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1112,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,3,False,-1,False,False,False,24,25,35,116.814,135735,1394,0.0,1,
+gemini-flash-lite-latest,147,path:robb.stark,robb.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1113,DOMAIN ADMINS,Maximum reasoning steps exceeded.,False,False,False,False,True,-1,0,True,3,False,-1,False,False,False,33,35,35,199.196,721528,2137,0.0,1,
+gemini-flash-lite-latest,147,control:jaime.lannister,jaime.lannister@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1114,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,24,25,35,115.482,174975,1613,0.0,1,
+gemini-flash-lite-latest,147,control:hodor,hodor@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1117,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,21,22,35,117.657,166578,1226,0.0,1,
+gemini-flash-lite-latest,147,control:arya.stark,arya.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1110,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,32,33,35,130.019,362191,2287,0.0,1,
+gpt-4o-mini,147,path:lord.varys,lord.varys@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1122,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,1,True,1,False,False,False,4,5,35,10.267,12524,196,0.0019961999999999996,1,
+gpt-4o-mini,147,path:catelyn.stark,catelyn.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1112,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,3,False,-1,False,False,False,5,6,35,10.912,14292,260,0.0022998000000000003,1,
+gpt-4o-mini,147,path:robb.stark,robb.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1113,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,3,False,-1,False,False,False,6,7,35,12.912,16499,281,0.00264345,1,
+gpt-4o-mini,147,control:jaime.lannister,jaime.lannister@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1114,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,11,13,35,24.714,41856,500,0.006578399999999999,1,
+gpt-4o-mini,147,control:arya.stark,arya.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1110,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,5,6,35,10.888,12543,198,0.00200025,1,
+gpt-4o-mini,147,control:hodor,hodor@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1117,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,8,9,35,16.177,19518,289,0.0031010999999999994,1,
+gpt-4o,147,path:lord.varys,lord.varys@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1122,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,1,True,1,False,False,False,3,5,35,10.026,12563,211,0.033517500000000006,1,
+gpt-4o,147,path:catelyn.stark,catelyn.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1112,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,3,False,-1,False,False,False,7,8,35,135.666,92244,345,0.23406,1,
+gpt-4o,147,path:robb.stark,robb.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1113,DOMAIN ADMINS,,False,False,False,False,,-1,,,-1,,-1,False,False,False,0,0,35,0.0,0,0,0.0,4,"OpenRouter unavailable after 6 attempts: HTTP 429: {
+    ""error"": {
+        ""message"": ""Rate limit reached for gpt-4o in organization org-5YrDClPfoudsIJgGyBqVjMc4 on tokens per min (TPM): Limit 30000, Used 14122"
+gpt-4o,147,control:jaime.lannister,jaime.lannister@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1114,DOMAIN ADMINS,NO PATH FOUND,False,False,True,True,False,-1,0,False,-1,False,-1,False,True,False,13,14,35,49.594,53058,674,0.13938499999999998,1,
+gpt-4o,147,control:arya.stark,arya.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1110,DOMAIN ADMINS,Maximum reasoning steps exceeded.,False,False,False,False,True,-1,0,False,-1,False,-1,False,False,False,35,35,35,610.187,303920,3140,0.7912000000000001,1,
+gpt-4o,147,control:hodor,hodor@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1117,DOMAIN ADMINS,Maximum reasoning steps exceeded.,False,False,False,False,True,-1,0,False,-1,False,-1,False,False,False,35,35,35,524.622,258453,3393,0.6800624999999999,1,
+gpt-4o,147,path:robb.stark,robb.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1113,DOMAIN ADMINS,NO PATH FOUND,False,False,False,True,False,-1,0,True,3,False,-1,False,False,False,7,8,35,136.227,92204,342,0.23392999999999997,1,
+claude-haiku-4-5,147,path:lord.varys,lord.varys@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1122,DOMAIN ADMINS,LORD.VARYS@SEVENKINGDOMS.LOCAL -> DOMAIN ADMINS@SEVENKINGDOMS.LOCAL,True,False,True,False,False,1,0,True,1,True,1,False,True,True,3,8,35,23.254,37160,2477,0.049545,1,
+claude-haiku-4-5,147,path:catelyn.stark,catelyn.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1112,DOMAIN ADMINS,CATELYN.STARK@NORTH.SEVENKINGDOMS.LOCAL -> ADMINISTRATORS@NORTH.SEVENKINGDOMS.LOCAL -> DOMAIN ADMINS,False,False,False,False,False,2,0,True,3,False,-1,False,False,False,26,30,35,56.777,495422,3686,0.513852,1,
+claude-haiku-4-5,147,path:robb.stark,robb.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1113,DOMAIN ADMINS,ROBB.STARK@NORTH.SEVENKINGDOMS.LOCAL -> ADMINISTRATORS@NORTH.SEVENKINGDOMS.LOCAL -> DOMAIN ADMINS@NORTH.SEVENKINGDOMS.LOCAL,False,False,False,False,False,2,0,True,3,False,-1,False,False,False,8,13,35,27.051,91762,2452,0.104022,1,
+claude-haiku-4-5,147,control:jaime.lannister,jaime.lannister@sevenkingdoms.local,S-1-5-21-551131715-114587592-2973961031-1114,DOMAIN ADMINS,Maximum reasoning steps exceeded.,False,False,False,False,True,-1,0,False,-1,False,-1,False,False,False,34,35,35,62.909,328990,3992,0.3489500000000001,1,
+claude-haiku-4-5,147,control:arya.stark,arya.stark@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1110,DOMAIN ADMINS,"I need to find the correct path from STARK to ADMINISTRATORS. Let me check the outbound edges from STARK again more carefully.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1106""}]
+</function_calls>
+
+The STARK group only has MemberOf to REMOTE DESKTOP USERS. Let me check if REMOTE DESKTOP USERS has a path to ADMINISTRATORS.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""NORTH.SEVENKINGDOMS.LOCAL-S-1-5-32-555""}]
+</function_calls>
+
+REMOTE DESKTOP USERS has no outbound edges. Let me try a different approach - check if arya.stark can reach ADMINISTRATORS directly through other means. Let me look at what ADMINISTRATORS can reach.
+<function_calls>
+[{""action"": ""query_inbound_edges"", ""input"": ""NORTH.SEVENKINGDOMS.LOCAL-S-1-5-32-544""}]
+</function_calls>
+
+I see ANSIBLE is a member of ADMINISTRATORS. Let me check if there's a path from arya.stark to ANSIBLE.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1110""}]
+</function_calls>
+
+Arya.stark is only a member of DOMAIN USERS and STARK. Let me check if DOMAIN USERS has any useful outbound edges.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-513""}]
+</function_calls>
+
+DOMAIN USERS has no outbound edges. Let me check the properties of arya.stark to see if there are any inferred escalation paths.
+<function_calls>
+[{""action"": ""get_node_properties"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1110""}]
+</function_calls>
+
+Let me check if there's a computer that arya.stark can access. Let me search for computers.
+<function_calls>
+[{""action"": ""search_node"", ""input"": ""WINTERFELL""}]
+</function_calls>
+
+Let me check the properties of WINTERFELL to see if it has any roastable targets or other escalation paths.
+<function_calls>
+[{""action"": ""get_node_properties"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1001""}]
+</function_calls>
+
+Let me check the inbound edges to WINTERFELL to see who can reach it.
+<function_calls>
+[{""action"": ""query_inbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1001""}]
+</function_calls>
+
+Let me check CASTELBLACK computer.
+<function_calls>
+[{""action"": ""get_node_properties"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1105""}]
+</function_calls>
+
+Let me check the inbound edges to CASTELBLACK.
+<function_calls>
+[{""action"": ""query_inbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1105""}]
+</function_calls>
+
+Let me check if ACCOUNT OPERATORS has any inbound edges from groups that arya.stark can reach.
+<function_calls>
+[{""action"": ""query_inbound_edges"", ""input"": ""NORTH.SEVENKINGDOMS.LOCAL-S-1-5-32-548""}]
+</function_calls>
+
+Let me try a simpler path - check if arya.stark can reach ADMINISTRATORS through STARK. Let me verify if STARK has GenericAll on ACCOUNT OPERATORS.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1106""}]
+</function_calls>
+
+STARK only has MemberOf to REMOTE DESKTOP USERS. Let me check if there's a direct path from arya.stark to ADMINISTRATORS by checking all inbound edges to ADMINISTRATORS again and finding which ones arya.stark can reach.
+
+Looking at the inbound edges to ADMINISTRATORS, I see ANSIBLE is a member. Let me check if arya.stark can reach ANSIBLE through any path. Let me search for a path from arya.stark to ANSIBLE.
+<function_calls>
+[{""action"": ""check_path_exists"", ""input"": {""start_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1110"", ""goal_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1000""}}]
+</function_calls>
+
+No path to ANSIBLE. Let me try a different approach - check if arya.stark can reach DOMAIN ADMINS through a computer with roastable targets. Let me search for all computers and check their properties.
+<function_calls>
+[{""action"": ""search_node"", ""input"": ""CASTELBLACK""}]
+</function_calls>
+
+Let me check the outbound edges from CASTELBLACK.
+<function_calls>
+[{""action"": ""query_outbound_edges"", ""input"": ""S-1-5-21-4150528177-3170585626-161332574-1105""}]
+</function_calls>
+
+Let me check if arya.stark can reach CASTELBLACK through STARK or REMOTE DESKTOP USERS.
+<function_calls>
+[{""action"": ""check_path_exists"", ""input"": {""start_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1110"", ""goal_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1105""}}]
+</function_calls>
+
+No direct path. Let me reconsider - arya.stark is in STARK group. Let me check what STARK group members can do. Let me look at the inbound edges to STARK to see if there's a way to escalate from there.
+
+Actually, let me try a simpler verification - just check if arya.stark can reach ADMINISTRATORS directly.
+<function_calls>
+[{""action"": ""check_path_exists"", ""input"": {""start_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1110"", ""goal_objectid"": ""NORTH.SEVENKINGDOMS.LOCAL-S-1-5-32-544""}}]
+</function_calls>
+
+No path. Let me check if there's a path to DOMAIN ADMINS directly.
+<function_calls>
+[{""action"": ""check_path_exists"", ""input"": {""start_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-1110"", ""goal_objectid"": ""S-1-5-21-4150528177-3170585626-161332574-512""}}]
+</function_calls>
+
+No path found. This suggests there may not be a privilege escalation path from arya.stark to DOMAIN ADMINS in this graph. Let me verify by checking all possible paths more systematically. Let me check what groups have inbound edges that could lead to DOMAIN ADMINS.
+
+Looking back at the inbound edges to DOMAIN ADMINS, the groups that can reach it are:
+- ADMINISTRATORS (WriteOwner, GenericWrite, Writ",False,False,False,False,True,-1,0,False,-1,False,-1,False,False,False,14,17,35,60.054,161889,4712,0.18544900000000003,1,
+claude-haiku-4-5,147,control:hodor,hodor@north.sevenkingdoms.local,S-1-5-21-4150528177-3170585626-161332574-1117,DOMAIN ADMINS,Maximum reasoning steps exceeded.,False,False,False,False,True,-1,0,False,-1,False,-1,False,False,False,33,35,35,298.306,607950,3811,0.6270049999999999,1,

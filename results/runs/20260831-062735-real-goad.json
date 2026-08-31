@@ -1,0 +1,37 @@
+{
+  "timestamp_utc": "20260831-062735",
+  "dataset": "real GOAD-Light 2-domain forest (merged CE export)",
+  "graph_nodes": 147,
+  "models": [
+    "gemini-flash-lite-latest",
+    "gpt-4o-mini"
+  ],
+  "starts": [
+    [
+      "lord.varys@sevenkingdoms.local",
+      "path"
+    ],
+    [
+      "catelyn.stark@north.sevenkingdoms.local",
+      "path"
+    ],
+    [
+      "robb.stark@north.sevenkingdoms.local",
+      "path"
+    ],
+    [
+      "jaime.lannister@sevenkingdoms.local",
+      "control"
+    ],
+    [
+      "arya.stark@north.sevenkingdoms.local",
+      "control"
+    ],
+    [
+      "hodor@north.sevenkingdoms.local",
+      "control"
+    ]
+  ],
+  "max_steps": 35,
+  "wall_seconds": 88.5
+}
