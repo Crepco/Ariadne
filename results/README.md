@@ -31,20 +31,17 @@ archive in `runs/` is a timestamped snapshot alongside a `.json` recording the d
 description, model ids, start users, and step budget — the closest thing to a fixed
 provenance record, since the live log keeps accumulating.
 
-The current `metrics.md` (5 models, 26 scored runs, real GOAD-Light data) was regenerated
-from the fully-resumed log after `claude-opus-4-8`'s 2-run subset was re-run against a
-freshly re-ingested copy of the real graph (Neo4j had briefly held a synthetic graph from an
-aborted comparison sweep in between); the raw per-run data behind every number in the paper
-is `runs/20260831-075906-real-goad.csv` plus the two `claude-opus-4-8` rows added after.
+The current `metrics.md` (4 models, 24 scored runs, real GOAD-Light data) was regenerated
+from the fully-resumed log after a freshly re-ingested copy of the real graph replaced one
+Neo4j had briefly held mid-session (an unrelated comparison sweep had temporarily
+overwritten it); the raw per-run data behind every number in the paper is
+`runs/20260831-075906-real-goad.csv`.
 
 ## Reading the intervals
 
 Rates carry 95% Wilson score intervals, not point estimates, because this benchmark's
-samples are small (6 runs for four models, 2 for one, deliberately — see the paper's
-Section 5) and its rates sit at the extremes, exactly where the normal approximation
-collapses to zero width and implies a certainty the data doesn't support. A 66.7%
-correctness over 6 runs is `66.7% [30.0–90.3]`; `claude-opus-4-8`'s 0.0% correctness over
-its 2-run subset is `0.0% [0.0–65.8]` — an interval wide enough that it must not be read as
-"this model never solves this task," only as "this model solved neither of the 2 cases we
-could afford to run against it." The overall 3.8% [0.7–18.9] hallucination figure in
-`metrics.md` pools all 26 runs across all 5 models.
+samples are small (6 runs per model — see the paper's Section 5) and its rates sit at the
+extremes, exactly where the normal approximation collapses to zero width and implies a
+certainty the data doesn't support. A 66.7% correctness over 6 runs is
+`66.7% [30.0–90.3]`; the overall 0.0% [0.0–13.8] hallucination figure in `metrics.md` pools
+all 24 runs across all 4 models.
