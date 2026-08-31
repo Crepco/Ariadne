@@ -10,8 +10,14 @@ against a real, ingested BloodHound/SharpHound export; re-run it to refresh.
 | `metrics.md` | Overall + per-model results table (Markdown), rates with 95% Wilson intervals |
 | `model_comparison.png` | Correctness vs. hallucination, per model — the paper's primary figure |
 | `failure_modes.png` | Outcome breakdown: correct / hallucinated / gave up / ran out of steps / wrong path |
-| `scaling.png`, `correctness_vs_size.png`, `hallucination_vs_size.png` | Legacy per-graph-size plots from `experiments/run_benchmark.py`'s synthetic sweeps; not meaningful for the current single-graph real-data run (one x-axis point) and not referenced in the paper — regenerate a synthetic sweep to make these informative again |
 | `runs/` | **Archived raw CSVs**, one per sweep, each with a `.json` of its provenance |
+
+There is deliberately no per-graph-size scaling plot: this benchmark runs against one real,
+live-collected graph (147 nodes), not a swept series of synthetic sizes, so a "vs. graph
+size" x-axis would have exactly one point. `experiments/run_benchmark.py` (the synthetic
+generator + sweep) still exists in this codebase and can produce that kind of plot again if
+a future synthetic comparison is wanted, but nothing synthetic is reported in the paper or
+committed under `results/`.
 
 These are committed so the repo is self-demonstrating. Don't hand-edit them — they're
 regenerated from `experiments/logs/results.csv` on every benchmark run.
@@ -37,6 +43,8 @@ Rates carry 95% Wilson score intervals, not point estimates, because this benchm
 samples are small (6 runs for four models, 2 for one, deliberately — see the paper's
 Section 5) and its rates sit at the extremes, exactly where the normal approximation
 collapses to zero width and implies a certainty the data doesn't support. A 66.7%
-correctness over 6 runs is `66.7% [30.0–90.3]`; a 50.0% hallucination rate over 2 runs is
-`50.0% [9.5–90.5]` (that model's own interval — the overall 3.8% figure in `metrics.md`
-pools all 26 runs).
+correctness over 6 runs is `66.7% [30.0–90.3]`; `claude-opus-4-8`'s 0.0% correctness over
+its 2-run subset is `0.0% [0.0–65.8]` — an interval wide enough that it must not be read as
+"this model never solves this task," only as "this model solved neither of the 2 cases we
+could afford to run against it." The overall 3.8% [0.7–18.9] hallucination figure in
+`metrics.md` pools all 26 runs across all 5 models.
